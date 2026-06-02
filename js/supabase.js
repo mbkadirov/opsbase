@@ -1,67 +1,71 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
 const SUPABASE_URL = 'https://njakbmroejvnasvjzefl.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qYWtibXJvZWp2bmFzdmp6ZWZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzNzQ4MDYsImV4cCI6MjA5NTk1MDgwNn0.GwEtfBQj76iYvHZcCD7Dw6-j5344RTkQf850KULYp3k';
+const SUPABASE_KEY = 'sb_publishable_O6asBhYcFBFUTkwCtNILXQ_pF-nzmVJ';
 
-const headers = {
-  'apikey': SUPABASE_KEY,
-  'Authorization': `Bearer ${SUPABASE_KEY}`,
-  'Content-Type': 'application/json',
-  'Prefer': 'return=representation'
-};
-
-async function sbFetch(path, options = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
-    headers: { ...headers, ...options.headers }
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.message || `HTTP ${res.status}`);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : [];
-}
+export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export const db = {
   // STORES
   async getStores(activeOnly = false) {
-    let q = 'stores?select=*&order=account,id';
-    if (activeOnly) q += '&active=eq.true';
-    return sbFetch(q);
-  },
-
-  async toggleActive(id, active) {
-    return sbFetch(`stores?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ active }) });
+    let query = supabase.from('stores').select('*').order('account').order('id');
+    if (activeOnly) query = query.eq('active', true);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async addStore(store) {
-    return sbFetch('stores', { method: 'POST', body: JSON.stringify(store) });
+    const { data, error } = await supabase.from('stores').insert(store).select();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async toggleActive(id, active) {
+    const { data, error } = await supabase.from('stores').update({ active }).eq('id', id).select();
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async deleteStore(id) {
-    return sbFetch(`stores?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Prefer: '' } });
+    const { error } = await supabase.from('stores').delete().eq('id', id);
+    if (error) throw new Error(error.message);
   },
 
   // ISSUES
   async getIssues(filters = {}) {
-    let q = 'issues?select=*,stores(name,account)&order=date.desc,created_at.desc';
-    if (filters.storeId) q += `&store_id=eq.${encodeURIComponent(filters.storeId)}`;
-    if (filters.status) q += `&status=eq.${encodeURIComponent(filters.status)}`;
-    return sbFetch(q);
+    let query = supabase
+      .from('issues')
+      .select('*, stores(name, account)')
+      .order('date', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (filters.storeId) query = query.eq('store_id', filters.storeId);
+    if (filters.status) query = query.eq('status', filters.status);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async addIssue(issue) {
-    return sbFetch('issues', { method: 'POST', body: JSON.stringify(issue) });
+    const { data, error } = await supabase.from('issues').insert(issue).select();
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async updateIssue(id, patch) {
-    return sbFetch(`issues?id=eq.${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    const { data, error } = await supabase.from('issues').update(patch).eq('id', id).select();
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   async deleteIssue(id) {
-    return sbFetch(`issues?id=eq.${id}`, { method: 'DELETE', headers: { Prefer: '' } });
+    const { error } = await supabase.from('issues').delete().eq('id', id);
+    if (error) throw new Error(error.message);
   },
 
   async getIssueCounts() {
-    return sbFetch('issues?select=store_id,status');
+    const { data, error } = await supabase.from('issues').select('store_id, status');
+    if (error) throw new Error(error.message);
+    return data;
   }
 };
