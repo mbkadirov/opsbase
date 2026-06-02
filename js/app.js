@@ -158,6 +158,11 @@ function switchScreen(name) {
   else if (name === 'issues') { document.getElementById('scIssues').classList.add('active'); renderIssues(); }
   else if (name === 'log') { document.getElementById('scLog').classList.add('active'); populateLogStores(); }
   else if (name === 'detail') { document.getElementById('scDetail').classList.add('active'); renderDetail(); }
+  else if (name === 'reports') {
+    document.getElementById('scReports').classList.add('active');
+    if (!state.issues.length) loadIssues().then(renderReports);
+    else renderReports();
+  }
 }
 
 // ── RENDER STORES ─────────────────────────────────────────────────────
@@ -411,4 +416,145 @@ function loadingHTML() {
 
 function emptyHTML(text, sub = '') {
   return `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">${text}</div>${sub ? `<div class="empty-sub">${sub}</div>` : ''}</div>`;
+}
+
+// ── REPORTS ───────────────────────────────────────────────────────────
+let reportPeriod = 'week';
+let trendChartInstance = null;
+
+window.setReportPeriod = function(period, el) {
+  reportPeriod = period;
+  document.querySelectorAll('#scReports .chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  renderReports();
+};
+
+function getReportIssues() {
+  const now = new Date();
+  let cutoff = null;
+  if (reportPeriod === 'week') {
+    cutoff = new Date(now); cutoff.setDate(now.getDate() - 7);
+  } else if (reportPeriod === 'month') {
+    cutoff = new Date(now); cutoff.setMonth(now.getMonth() - 1);
+  }
+  if (!cutoff) return state.issues;
+  const cutoffStr = cutoff.toISOString().split('T')[0];
+  return state.issues.filter(i => i.date >= cutoffStr);
+}
+
+function renderReports() {
+  const issues = getReportIssues();
+  const label = reportPeriod === 'week' ? 'Last 7 days' : reportPeriod === 'month' ? 'Last 30 days' : 'All time';
+  document.getElementById('reportsSub').textContent = `${label} · ${issues.length} issues`;
+
+  // KPIs
+  const open = issues.filter(i => i.status === 'open').length;
+  const inprog = issues.filter(i => i.status === 'in progress').length;
+  const resolved = issues.filter(i => i.status === 'resolved').length;
+  document.getElementById('reportKpis').innerHTML = `
+    <div class="report-kpi"><div class="report-kpi-val" style="color:var(--warn)">${open}</div><div class="report-kpi-label">Open</div></div>
+    <div class="report-kpi"><div class="report-kpi-val" style="color:#facc15">${inprog}</div><div class="report-kpi-label">In Progress</div></div>
+    <div class="report-kpi"><div class="report-kpi-val" style="color:var(--accent)">${resolved}</div><div class="report-kpi-label">Resolved</div></div>
+  `;
+
+  // By account
+  const acctMap = {};
+  issues.forEach(i => {
+    const acct = i.stores?.account || 'Unknown';
+    if (!acctMap[acct]) acctMap[acct] = { open: 0, total: 0 };
+    acctMap[acct].total++;
+    if (i.status !== 'resolved') acctMap[acct].open++;
+  });
+  const acctColors = { 'Giant Food':'#00e5a0','Wegmans':'#0099ff','Solidcore':'#c084fc','Food Lion':'#fb923c','Office Depot':'#60a5fa','Zara':'#f472b6' };
+  const maxAcct = Math.max(...Object.values(acctMap).map(v => v.total), 1);
+  document.getElementById('reportByAccount').innerHTML = Object.entries(acctMap)
+    .sort((a,b) => b[1].total - a[1].total)
+    .map(([acct, v]) => `
+      <div class="report-bar-row">
+        <div class="report-bar-label">${acct}</div>
+        <div class="report-bar-wrap"><div class="report-bar-fill" style="width:${Math.round(v.total/maxAcct*100)}%;background:${acctColors[acct]||'var(--accent)'}"></div></div>
+        <div class="report-bar-count">${v.total}</div>
+      </div>`).join('') || '<div class="empty-text" style="padding:12px 0">No data</div>';
+
+  // By category
+  const catMap = {};
+  issues.forEach(i => {
+    catMap[i.category] = (catMap[i.category] || 0) + 1;
+  });
+  const maxCat = Math.max(...Object.values(catMap), 1);
+  document.getElementById('reportByCategory').innerHTML = Object.entries(catMap)
+    .sort((a,b) => b[1] - a[1])
+    .map(([cat, count]) => `
+      <div class="report-bar-row">
+        <div class="report-bar-label">${cat}</div>
+        <div class="report-bar-wrap"><div class="report-bar-fill" style="width:${Math.round(count/maxCat*100)}%;background:var(--blue)"></div></div>
+        <div class="report-bar-count">${count}</div>
+      </div>`).join('') || '<div class="empty-text" style="padding:12px 0">No data</div>';
+
+  // Top stores
+  const storeMap = {};
+  issues.forEach(i => {
+    if (!storeMap[i.store_id]) storeMap[i.store_id] = { open: 0, total: 0, name: i.stores?.name || i.store_id, acct: i.stores?.account || '' };
+    storeMap[i.store_id].total++;
+    if (i.status !== 'resolved') storeMap[i.store_id].open++;
+  });
+  const topStores = Object.entries(storeMap).sort((a,b) => b[1].open - a[1].open).slice(0, 8);
+  document.getElementById('reportTopStores').innerHTML = topStores.length
+    ? topStores.map(([id, v]) => `
+      <div class="report-store-row" onclick="openStoreDetail('${id}')">
+        <div>
+          <div class="report-store-name">${v.name}</div>
+          <div class="report-store-meta">${v.acct} · ${v.total} total</div>
+        </div>
+        <span class="issue-pill ${v.open > 0 ? 'pill-open' : 'pill-ok'}">${v.open > 0 ? v.open + ' open' : '✓ clear'}</span>
+      </div>`).join('')
+    : '<div class="empty-text" style="padding:12px 0;color:var(--muted);font-size:13px">No issues in this period</div>';
+
+  // Trend chart
+  renderTrendChart(issues);
+}
+
+function renderTrendChart(issues) {
+  const canvas = document.getElementById('trendChart');
+  if (!canvas) return;
+
+  // Build daily buckets for last 14 days
+  const days = 14;
+  const buckets = {};
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const key = d.toISOString().split('T')[0];
+    buckets[key] = { logged: 0, resolved: 0 };
+  }
+  issues.forEach(i => {
+    if (buckets[i.date]) buckets[i.date].logged++;
+    if (i.status === 'resolved' && buckets[i.date]) buckets[i.date].resolved++;
+  });
+
+  const labels = Object.keys(buckets).map(d => d.slice(5)); // MM-DD
+  const logged = Object.values(buckets).map(b => b.logged);
+  const resolved = Object.values(buckets).map(b => b.resolved);
+
+  if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
+
+  if (typeof Chart === 'undefined') return;
+
+  trendChartInstance = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Logged', data: logged, backgroundColor: '#ff6b3588', borderRadius: 3 },
+        { label: 'Resolved', data: resolved, backgroundColor: '#00e5a066', borderRadius: 3 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#6b7785', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#6b7785', font: { size: 10 } }, grid: { color: '#2a3038' } },
+        y: { ticks: { color: '#6b7785', font: { size: 10 }, stepSize: 1 }, grid: { color: '#2a3038' }, beginAtZero: true }
+      }
+    }
+  });
 }
