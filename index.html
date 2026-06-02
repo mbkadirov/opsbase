@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OpsBase">
+  <meta name="theme-color" content="#0d0f11">
+  <meta name="description" content="Field operations hub — store management and issue tracking">
+  <title>OpsBase</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-logo">OPS<span>BASE</span></div>
+    <div class="header-stats" id="headerStats">
+      <div class="hstat"><b>—</b> stores</div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- ── STORES SCREEN ── -->
+    <div class="screen active" id="scStores">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Stores</div>
+          <div class="page-sub">74 locations · 6 accounts</div>
+        </div>
+        <button class="log-btn" id="addStoreBtn">+ Add</button>
+      </div>
+
+      <div class="search-row">
+        <div class="search-wrap">
+          <i class="ti ti-search search-icon"></i>
+          <input type="text" id="storeSearch" placeholder="Search stores…">
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;flex-shrink:0">
+          <input type="checkbox" id="activeOnlyToggle" onchange="loadAll()" style="width:auto;height:auto;accent-color:var(--accent)">
+          Active only
+        </label>
+      </div>
+
+      <div class="filter-scroll" id="storeChips">
+        <button class="chip active" data-val="all">All</button>
+        <button class="chip" data-val="Giant Food">Giant Food</button>
+        <button class="chip" data-val="Wegmans">Wegmans</button>
+        <button class="chip" data-val="Solidcore">Solidcore</button>
+        <button class="chip" data-val="Food Lion">Food Lion</button>
+        <button class="chip" data-val="Office Depot">Office Depot</button>
+        <button class="chip" data-val="Zara">Zara</button>
+      </div>
+
+      <div class="store-list" id="storeList">
+        <div class="loading"><div class="spinner"></div>Loading stores…</div>
+      </div>
+    </div>
+
+    <!-- ── ISSUES SCREEN ── -->
+    <div class="screen" id="scIssues">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Issues</div>
+          <div class="page-sub" id="issueCount">Loading…</div>
+        </div>
+      </div>
+
+      <div class="search-row" style="gap:8px;flex-wrap:wrap">
+        <div class="search-wrap" style="min-width:150px">
+          <i class="ti ti-search search-icon"></i>
+          <input type="text" id="issueSearch" placeholder="Search issues…">
+        </div>
+      </div>
+
+      <div style="padding:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap">
+        <select id="issueAcctFilter" style="flex:1;min-width:140px;font-size:13px">
+          <option value="">All accounts</option>
+          <option>Giant Food</option>
+          <option>Wegmans</option>
+          <option>Solidcore</option>
+          <option>Food Lion</option>
+          <option>Office Depot</option>
+          <option>Zara</option>
+        </select>
+        <select id="issueCatFilter" style="flex:1;min-width:120px;font-size:13px">
+          <option value="">All categories</option>
+          <option>Cleaning</option>
+          <option>Equipment</option>
+          <option>Safety</option>
+          <option>Access</option>
+          <option>Scheduling</option>
+          <option>Supplies</option>
+          <option>Other</option>
+        </select>
+      </div>
+
+      <div class="filter-scroll" id="issueChips">
+        <button class="chip active" data-val="all">All</button>
+        <button class="chip" data-val="open">Open</button>
+        <button class="chip" data-val="in-progress">In progress</button>
+        <button class="chip" data-val="resolved">Resolved</button>
+      </div>
+
+      <div class="issue-list" id="issueList">
+        <div class="loading"><div class="spinner"></div>Loading issues…</div>
+      </div>
+    </div>
+
+    <!-- ── LOG ISSUE SCREEN ── -->
+    <div class="screen" id="scLog">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Log Issue</div>
+          <div class="page-sub">Report a store problem</div>
+        </div>
+      </div>
+
+      <form class="form-screen" id="logForm">
+        <div class="form-group">
+          <label class="form-label">Store</label>
+          <select id="logStoreId" required>
+            <option value="">Select store…</option>
+          </select>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">Category</label>
+            <select id="logCategory">
+              <option>Cleaning</option>
+              <option>Equipment</option>
+              <option>Safety</option>
+              <option>Access</option>
+              <option>Scheduling</option>
+              <option>Supplies</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Date</label>
+            <input type="date" id="logDate">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea id="logDesc" placeholder="Describe the issue…" required></textarea>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label">Status</label>
+            <select id="logStatus">
+              <option value="open">Open</option>
+              <option value="in progress">In progress</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Assigned to</label>
+            <input type="text" id="logAssignee" placeholder="Name (optional)">
+          </div>
+        </div>
+
+        <button type="submit" class="btn-submit" id="logSubmitBtn">Log Issue</button>
+      </form>
+    </div>
+
+    <!-- ── STORE DETAIL SCREEN ── -->
+    <div class="screen" id="scDetail">
+      <div class="detail-screen">
+        <div class="detail-header">
+          <button class="back-btn" id="backBtn">‹ Back</button>
+          <div style="flex:1;min-width:0">
+            <div class="page-title" id="detailTitle" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+            <div class="page-sub" id="detailSub"></div>
+          </div>
+          <button class="action-btn" id="detailActiveBtn"></button>
+        </div>
+
+        <div class="detail-stats">
+          <div class="dstat" id="detailOpen"></div>
+          <div class="dstat" id="detailResolved"></div>
+          <div class="dstat" id="detailTotal"></div>
+        </div>
+
+        <div class="section-row">
+          <span class="section-label">Issue history</span>
+          <button class="log-btn" id="detailLogBtn">+ Log issue</button>
+        </div>
+
+        <div class="issue-list" id="detailIssueList"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-screen="stores">
+      <span class="nav-icon"><i class="ti ti-building-store"></i></span>
+      Stores
+    </button>
+    <button class="nav-item" data-screen="issues">
+      <span class="nav-icon"><i class="ti ti-alert-circle"></i></span>
+      Issues
+    </button>
+    <button class="nav-item" data-screen="log">
+      <span class="nav-icon"><i class="ti ti-circle-plus"></i></span>
+      Log
+    </button>
+  </nav>
+
+</div>
+
+<!-- ADD STORE MODAL -->
+<div class="modal-overlay" id="addStoreModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h2>Add store</h2>
+    <div class="form-group mt8">
+      <label class="form-label">Store ID</label>
+      <input type="text" id="newStoreId" placeholder="e.g. GF-044">
+    </div>
+    <div class="form-group mt12">
+      <label class="form-label">Name / Location</label>
+      <input type="text" id="newStoreName" placeholder="e.g. Giant Food - Laurel Hills">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" class="mt12">
+      <div class="form-group">
+        <label class="form-label">Account</label>
+        <select id="newStoreAccount">
+          <option>Giant Food</option>
+          <option>Wegmans</option>
+          <option>Solidcore</option>
+          <option>Food Lion</option>
+          <option>Office Depot</option>
+          <option>Zara</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">State</label>
+        <select id="newStoreState">
+          <option>MD</option><option>PA</option><option>VA</option>
+          <option>DC</option><option>DE</option><option>WV</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group mt12">
+      <label class="form-label">Address (optional)</label>
+      <input type="text" id="newStoreAddress" placeholder="Street address">
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" id="cancelStore">Cancel</button>
+      <button class="btn-save" id="saveStoreBtn">Save store</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
