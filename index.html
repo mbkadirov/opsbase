@@ -155,6 +155,7 @@
       <div class="chips" id="issueChips" role="tablist" aria-label="Status">
         <button class="chip active" data-val="active">Open</button>
         <button class="chip" data-val="in progress">In progress</button>
+        <button class="chip" data-val="pending review" id="reviewChip">Needs approval</button>
         <button class="chip" data-val="resolved">Resolved</button>
         <button class="chip" data-val="all">All</button>
       </div>
@@ -198,12 +199,11 @@
           <p class="field-error" id="logError" hidden></p>
         </div>
         <div class="field-row">
-          <div class="field">
+          <div class="field" id="logStatusField">
             <label for="logStatus">Status</label>
             <select id="logStatus">
               <option value="open">Open</option>
               <option value="in progress">In progress</option>
-              <option value="resolved">Resolved</option>
             </select>
           </div>
           <div class="field">
@@ -316,6 +316,44 @@
     <div class="sheet-actions">
       <button class="btn btn-ghost" id="cancelStore">Cancel</button>
       <button class="btn btn-primary" id="saveStoreBtn">Add store</button>
+    </div>
+  </div>
+</div>
+
+<!-- ISSUE DETAIL -->
+<div class="sheet-overlay" id="issueSheet">
+  <div class="sheet sheet-tall issue-sheet" role="dialog" aria-modal="true" aria-labelledby="isTitle">
+    <div class="sheet-handle"></div>
+    <div class="is-head">
+      <div class="is-id">
+        <h2 id="isTitle"></h2>
+        <p class="page-sub" id="isSub"></p>
+      </div>
+      <button class="btn btn-sm icon" id="isClose" aria-label="Close"><i class="ti ti-x" aria-hidden="true"></i></button>
+    </div>
+    <div class="is-body" id="isBody"></div>
+    <form class="is-comment" id="isCommentForm" novalidate>
+      <label for="isComment" class="sr-only">Add a comment</label>
+      <textarea id="isComment" rows="2" placeholder="Add a comment or update"></textarea>
+      <button type="submit" class="btn btn-primary btn-sm" id="isCommentBtn">Post</button>
+    </form>
+  </div>
+</div>
+
+<!-- NOTE (resolve / send back / reopen) -->
+<div class="sheet-overlay" id="noteSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="noteTitle"></h2>
+    <p class="page-sub" id="noteSub"></p>
+    <div class="field">
+      <label for="noteText" id="noteLabel"></label>
+      <textarea id="noteText" rows="4"></textarea>
+    </div>
+    <p class="field-error" id="noteError" hidden></p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="noteCancel">Cancel</button>
+      <button class="btn btn-primary" id="noteSubmit"></button>
     </div>
   </div>
 </div>

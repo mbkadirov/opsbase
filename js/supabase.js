@@ -42,6 +42,14 @@ export const db = {
     if (!rows.length) throw new Error('not allowed');
   },
 
+  async resolveIssue(id, note) { return check(await supabase.rpc('resolve_issue', { p_issue: id, p_note: note })); },
+  async reviewIssue(id, approve, note = '') { return check(await supabase.rpc('review_issue', { p_issue: id, p_approve: approve, p_note: note })); },
+  async reopenIssue(id, note = '') { return check(await supabase.rpc('reopen_issue', { p_issue: id, p_note: note })); },
+  async addComment(id, body) { return check(await supabase.rpc('add_issue_comment', { p_issue: id, p_body: body })); },
+  async getComments(id) {
+    return check(await supabase.from('issue_comments').select('*').eq('issue_id', id).order('created_at'));
+  },
+
   async myProfile(uid) { return check(await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()); },
   async setMyName(name) { return check(await supabase.rpc('set_my_name', { new_name: name })); },
   async getProfiles() { return check(await supabase.from('profiles').select('*').order('created_at')); },
