@@ -1,560 +1,558 @@
 import { db } from './supabase.js';
+import { healthScore, issuePoints, daysSince, isOpen, band } from './health.js';
 
 // ── STATE ─────────────────────────────────────────────────────────────
 const state = {
   stores: [],
   issues: [],
-  issueCounts: {},   // { storeId: { open, total } }
-  activeScreen: 'stores',
-  storeFilter: 'all',
-  issueFilter: 'all',
+  byId: new Map(),
+  screen: 'stores',
+  storeAccount: 'all',
   storeSearch: '',
+  showInactive: false,
+  issueStatus: 'active',
   issueSearch: '',
-  issueAccountFilter: '',
-  issueCatFilter: '',
-  selectedStore: null,
-  loading: false
+  issueAccount: '',
+  issueCategory: '',
+  reportPeriod: 'week',
+  selectedId: null,
+  loaded: false,
+  pendingDelete: null
 };
 
-const ACCOUNT_CODES = {
-  'Giant Food': 'GF', 'Wegmans': 'WM', 'Solidcore': 'SC',
-  'Food Lion': 'FL', 'Office Depot': 'OD', 'Zara': 'ZA'
-};
-const ACCOUNT_CLASS = {
-  'Giant Food': 'gf', 'Wegmans': 'wm', 'Solidcore': 'sc',
-  'Food Lion': 'fl', 'Office Depot': 'od', 'Zara': 'za'
-};
+const ACCOUNT_ORDER = ['Wegmans', 'Zara', 'Office Depot', 'Food Lion', 'Giant Food', 'Solidcore'];
+const ACCOUNT_CODES = { 'Giant Food': 'GF', 'Wegmans': 'WM', 'Solidcore': 'SC', 'Food Lion': 'FL', 'Office Depot': 'OD', 'Zara': 'ZA' };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const acctRank = (a) => { const i = ACCOUNT_ORDER.indexOf(a); return i < 0 ? 99 : i; };
+const storeNum = (s) => parseInt(String(s.name).replace(/^\D+/, ''), 10) || 0;
+const city = (s) => s?.address || s?.state || '';
+const today = () => new Date().toISOString().split('T')[0];
 
 // ── INIT ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }
-  await loadAll();
-  renderHeader();
-  switchScreen('stores');
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   bindEvents();
+  $('logDate').value = today();
+  await loadAll();
+  switchScreen('stores');
 });
 
 async function loadAll() {
-  setLoading(true);
   try {
-    const activeOnly = document.getElementById('activeOnlyToggle')?.checked ?? false;
-  const [stores, counts] = await Promise.all([db.getStores(activeOnly), db.getIssueCounts()]);
+    const [stores, issues] = await Promise.all([db.getStores(false), db.getIssues()]);
     state.stores = stores;
-    // Build count map
-    state.issueCounts = {};
-    counts.forEach(i => {
-      if (!state.issueCounts[i.store_id]) state.issueCounts[i.store_id] = { open: 0, total: 0 };
-      state.issueCounts[i.store_id].total++;
-      if (i.status !== 'resolved') state.issueCounts[i.store_id].open++;
-    });
-    await loadIssues();
+    state.issues = issues;
+    state.byId = new Map(stores.map((s) => [s.id, s]));
+    state.loaded = true;
   } catch (e) {
-    showToast('Connection error — check network', 'error');
+    showToast("Couldn't reach the database. Check your connection and pull to refresh.", { error: true });
   }
-  setLoading(false);
+  renderHeader();
+  renderAccountControls();
 }
 
-async function loadIssues(filters = {}) {
-  try {
-    state.issues = await db.getIssues(filters);
-  } catch (e) {
-    showToast('Failed to load issues', 'error');
-  }
-}
+// Derived data
+const isActiveStore = (s) => s && s.active !== false;
+const issuesFor = (id) => state.issues.filter((i) => i.store_id === id);
+const scoreFor = (id) => healthScore(issuesFor(id));
+const openCountFor = (id) => issuesFor(id).filter(isOpen).length;
+const visibleIssues = () => state.issues.filter((i) => state.showInactive || isActiveStore(state.byId.get(i.store_id)));
 
 // ── EVENTS ────────────────────────────────────────────────────────────
 function bindEvents() {
-  // Nav
-  document.querySelectorAll('.nav-item').forEach(el => {
-    el.addEventListener('click', () => switchScreen(el.dataset.screen));
+  document.querySelectorAll('.nav-item').forEach((el) => el.addEventListener('click', () => {
+    if (el.dataset.screen === 'log') resetLogForm();
+    switchScreen(el.dataset.screen);
+  }));
+
+  $('storeSearch').addEventListener('input', (e) => { state.storeSearch = e.target.value.trim().toLowerCase(); renderStores(); });
+  $('showInactive').addEventListener('change', (e) => { state.showInactive = e.target.checked; renderAccountControls(); renderStores(); renderHeader(); });
+
+  $('issueSearch').addEventListener('input', (e) => { state.issueSearch = e.target.value.trim().toLowerCase(); renderIssues(); });
+  $('issueAcctFilter').addEventListener('change', (e) => { state.issueAccount = e.target.value; renderIssues(); });
+  $('issueCatFilter').addEventListener('change', (e) => { state.issueCategory = e.target.value; renderIssues(); });
+  chipGroup('issueChips', (v) => { state.issueStatus = v; renderIssues(); });
+  chipGroup('reportChips', (v) => { state.reportPeriod = v; renderReports(); });
+
+  $('logForm').addEventListener('submit', handleSaveIssue);
+  $('logDesc').addEventListener('input', () => { $('logError').hidden = true; });
+  $('logStoreId').addEventListener('change', () => { $('logError').hidden = true; });
+  $('logCancelBtn').addEventListener('click', () => { const back = state.selectedId ? 'detail' : 'issues'; resetLogForm(); switchScreen(back); });
+
+  $('addStoreBtn').addEventListener('click', () => openSheet('addStoreModal'));
+  $('cancelStore').addEventListener('click', () => closeSheet('addStoreModal'));
+  $('saveStoreBtn').addEventListener('click', handleAddStore);
+  document.querySelectorAll('.sheet-overlay').forEach((el) => el.addEventListener('click', (e) => { if (e.target === el) closeSheet(el.id); }));
+
+  $('backBtn').addEventListener('click', () => { state.selectedId = null; switchScreen('stores'); });
+  $('detailLogBtn').addEventListener('click', () => { resetLogForm(); $('logStoreId').value = state.selectedId || ''; switchScreen('log'); });
+
+  // Delegated clicks for rendered lists
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-act]');
+    if (!t) return;
+    const { act, id } = t.dataset;
+    if (act === 'store') openStore(id);
+    else if (act === 'status') setStatus(Number(id), t.dataset.to);
+    else if (act === 'edit') editIssue(Number(id));
+    else if (act === 'delete') deleteIssue(Number(id));
   });
+}
 
-  // Store search
-  document.getElementById('storeSearch').addEventListener('input', e => {
-    state.storeSearch = e.target.value.toLowerCase();
-    renderStores();
-  });
-
-  // Account filter chips
-  document.querySelectorAll('#storeChips .chip').forEach(el => {
-    el.addEventListener('click', () => {
-      document.querySelectorAll('#storeChips .chip').forEach(c => c.classList.remove('active'));
-      el.classList.add('active');
-      state.storeFilter = el.dataset.val;
-      renderStores();
-    });
-  });
-
-  // Issue filter chips
-  document.querySelectorAll('#issueChips .chip').forEach(el => {
-    el.addEventListener('click', () => {
-      document.querySelectorAll('#issueChips .chip').forEach(c => c.classList.remove('active'));
-      el.classList.add('active');
-      state.issueFilter = el.dataset.val;
-      renderIssues();
-    });
-  });
-
-  // Issue search
-  document.getElementById('issueSearch').addEventListener('input', e => {
-    state.issueSearch = e.target.value.toLowerCase();
-    renderIssues();
-  });
-
-  // Issue account filter
-  document.getElementById('issueAcctFilter').addEventListener('change', e => {
-    state.issueAccountFilter = e.target.value;
-    renderIssues();
-  });
-
-  // Issue category filter
-  document.getElementById('issueCatFilter').addEventListener('change', e => {
-    state.issueCatFilter = e.target.value;
-    renderIssues();
-  });
-
-  // Log issue form
-  document.getElementById('logForm').addEventListener('submit', handleLogIssue);
-
-  // Add store modal
-  document.getElementById('addStoreBtn').addEventListener('click', () => openModal('addStoreModal'));
-  document.getElementById('cancelStore').addEventListener('click', () => closeModal('addStoreModal'));
-  document.getElementById('saveStoreBtn').addEventListener('click', handleAddStore);
-
-  // Detail screen back
-  document.getElementById('backBtn').addEventListener('click', () => {
-    state.selectedStore = null;
-    switchScreen('stores');
-  });
-
-  // Detail log issue button
-  document.getElementById('detailLogBtn').addEventListener('click', () => {
-    const store = state.selectedStore;
-    if (store) {
-      const sel = document.getElementById('logStoreId');
-      sel.value = store.id;
-      switchScreen('log');
-    }
-  });
-
-  // Populate log store today date
-  document.getElementById('logDate').valueAsDate = new Date();
-
-  // Close modals on overlay click
-  document.querySelectorAll('.modal-overlay').forEach(el => {
-    el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
+function chipGroup(id, onPick) {
+  $(id).addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    $(id).querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c === chip));
+    onPick(chip.dataset.val);
   });
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports' };
 function switchScreen(name) {
-  state.activeScreen = name;
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.screen === name));
-
-  if (name === 'stores') { document.getElementById('scStores').classList.add('active'); renderStores(); }
-  else if (name === 'issues') { document.getElementById('scIssues').classList.add('active'); renderIssues(); }
-  else if (name === 'log') { document.getElementById('scLog').classList.add('active'); populateLogStores(); }
-  else if (name === 'detail') { document.getElementById('scDetail').classList.add('active'); renderDetail(); }
-  else if (name === 'reports') {
-    document.getElementById('scReports').classList.add('active');
-    if (!state.issues.length) loadIssues().then(renderReports);
-    else renderReports();
-  }
+  state.screen = name;
+  Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
+  const navName = name === 'detail' ? 'stores' : name;
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.screen === navName));
+  if (name === 'stores') renderStores();
+  else if (name === 'issues') renderIssues();
+  else if (name === 'log') populateLogStores();
+  else if (name === 'detail') renderDetail();
+  else if (name === 'reports') renderReports();
+  window.scrollTo({ top: 0 });
 }
 
-// ── RENDER STORES ─────────────────────────────────────────────────────
+function rerender() {
+  renderHeader();
+  if (state.screen === 'stores') renderStores();
+  else if (state.screen === 'issues') renderIssues();
+  else if (state.screen === 'detail') renderDetail();
+  else if (state.screen === 'reports') renderReports();
+}
+
+// ── HEADER & ACCOUNT CONTROLS ─────────────────────────────────────────
+function renderHeader() {
+  const active = state.stores.filter(isActiveStore);
+  const open = state.issues.filter((i) => isOpen(i) && isActiveStore(state.byId.get(i.store_id))).length;
+  $('headerStats').innerHTML = `<span><b>${active.length}</b> stores</span><span class="${open ? 'warn' : ''}"><b>${open}</b> open</span>`;
+  const badge = $('navBadge');
+  badge.hidden = !open;
+  badge.textContent = open > 99 ? '99+' : String(open);
+}
+
+function shownStores() {
+  return state.stores.filter((s) => state.showInactive || isActiveStore(s));
+}
+
+function renderAccountControls() {
+  const stores = shownStores();
+  const accounts = [...new Set(stores.map((s) => s.account))].sort((a, b) => acctRank(a) - acctRank(b));
+  if (state.storeAccount !== 'all' && !accounts.includes(state.storeAccount)) state.storeAccount = 'all';
+  const chip = (val, label, n) => `<button class="chip ${state.storeAccount === val ? 'active' : ''}" data-val="${esc(val)}">${esc(label)}<span class="n">${n}</span></button>`;
+  $('storeChips').innerHTML = chip('all', 'All', stores.length) + accounts.map((a) => chip(a, a, stores.filter((s) => s.account === a).length)).join('');
+  if (!$('storeChips').dataset.bound) {
+    chipGroup('storeChips', (v) => { state.storeAccount = v; renderStores(); });
+    $('storeChips').dataset.bound = '1';
+  }
+  const sel = $('issueAcctFilter');
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">All accounts</option>' + accounts.map((a) => `<option>${esc(a)}</option>`).join('');
+  sel.value = accounts.includes(keep) ? keep : '';
+  state.issueAccount = sel.value;
+
+  const nAcct = accounts.length;
+  $('storesSub').textContent = state.loaded ? `${stores.length} location${stores.length === 1 ? '' : 's'} · ${nAcct} account${nAcct === 1 ? '' : 's'}` : 'Loading…';
+}
+
+// ── STORES ────────────────────────────────────────────────────────────
+function scoreBadge(score, cls = '') {
+  return `<div class="score ${band(score)} ${cls}" style="--v:${score}" title="Health score ${score}"><span>${score}</span></div>`;
+}
+
 function renderStores() {
-  const list = document.getElementById('storeList');
-  let filtered = state.stores.filter(s => {
-    if (state.storeFilter !== 'all' && s.account !== state.storeFilter) return false;
-    if (state.storeSearch && !s.name.toLowerCase().includes(state.storeSearch) && !s.id.toLowerCase().includes(state.storeSearch)) return false;
+  const list = $('storeList');
+  if (!state.loaded) { list.innerHTML = loadingHTML('Loading stores…'); return; }
+  const q = state.storeSearch;
+  const stores = shownStores().filter((s) => {
+    if (state.storeAccount !== 'all' && s.account !== state.storeAccount) return false;
+    if (q && ![s.name, s.id, s.address, s.state].some((v) => String(v || '').toLowerCase().includes(q))) return false;
     return true;
   });
+  if (!stores.length) { list.innerHTML = emptyHTML('No stores match', 'Try another search or account.'); return; }
 
-  if (state.loading) { list.innerHTML = loadingHTML(); return; }
-  if (!filtered.length) { list.innerHTML = emptyHTML('No stores found', 'Try adjusting your search or filter'); return; }
-
-  list.innerHTML = filtered.map(s => {
-    const counts = state.issueCounts[s.id] || { open: 0, total: 0 };
-    const cls = ACCOUNT_CLASS[s.account] || 'gf';
-    const code = ACCOUNT_CODES[s.account] || '??';
-    const pillHtml = counts.open > 0
-      ? `<span class="issue-pill pill-open">${counts.open} open</span>`
-      : `<span class="issue-pill pill-ok">✓ clear</span>`;
-    const inactive = s.active === false;
-    return `<div class="store-card ${counts.open > 0 ? 'has-issues' : ''} ${inactive ? 'inactive' : ''}" onclick="openStoreDetail('${s.id}')">
-      <div class="store-avatar av-${cls}">${code}</div>
-      <div class="store-info">
-        <div class="store-name">${s.name}</div>
-        <div class="store-meta">${s.id} · ${s.state}${inactive ? ' · <span style="color:var(--danger)">inactive</span>' : ''}</div>
+  const groups = new Map();
+  stores.forEach((s) => { if (!groups.has(s.account)) groups.set(s.account, []); groups.get(s.account).push(s); });
+  list.innerHTML = [...groups.entries()].sort((a, b) => acctRank(a[0]) - acctRank(b[0])).map(([acct, rows]) => {
+    const scored = rows.map((s) => ({ s, score: scoreFor(s.id), open: openCountFor(s.id) }))
+      .sort((a, b) => a.score - b.score || b.open - a.open || storeNum(a.s) - storeNum(b.s));
+    const withOpen = scored.filter((r) => r.open).length;
+    return `<section class="group">
+      <div class="group-head"><h2>${esc(acct)}</h2><span>${rows.length} store${rows.length === 1 ? '' : 's'}${withOpen ? ` · ${withOpen} with issues` : ''}</span></div>
+      <div class="store-list">${scored.map(({ s, score, open }) => `
+        <button class="store-row ${isActiveStore(s) ? '' : 'inactive'}" data-act="store" data-id="${esc(s.id)}">
+          ${scoreBadge(score)}
+          <div class="store-info">
+            <div class="store-name">${esc(s.name)}</div>
+            <div class="store-meta">${esc(city(s))}${isActiveStore(s) ? '' : ' · inactive'}</div>
+          </div>
+          <div class="store-right">
+            <span class="count ${open ? 'has' : 'none'}">${open ? `${open} open` : 'Clear'}</span>
+            <i class="ti ti-chevron-right" aria-hidden="true"></i>
+          </div>
+        </button>`).join('')}
       </div>
-      <div class="store-right">
-        ${pillHtml}
-        <span class="chevron">›</span>
-      </div>
-    </div>`;
+    </section>`;
   }).join('');
 }
 
-// ── RENDER ISSUES ─────────────────────────────────────────────────────
-function renderIssues() {
-  const list = document.getElementById('issueList');
-  let filtered = state.issues.filter(i => {
-    if (state.issueFilter !== 'all') {
-      const status = i.status.replace(' ', '-');
-      if (state.issueFilter === 'in-progress' && i.status !== 'in progress') return false;
-      if (state.issueFilter !== 'in-progress' && state.issueFilter !== 'all' && i.status !== state.issueFilter) return false;
-    }
-    if (state.issueAccountFilter && i.stores?.account !== state.issueAccountFilter) return false;
-    if (state.issueCatFilter && i.category !== state.issueCatFilter) return false;
-    if (state.issueSearch) {
-      const q = state.issueSearch;
-      if (!i.description?.toLowerCase().includes(q) && !i.store_id?.toLowerCase().includes(q) && !i.stores?.name?.toLowerCase().includes(q)) return false;
-    }
-    return true;
-  });
-
-  document.getElementById('issueCount').textContent = `${filtered.length} issue${filtered.length !== 1 ? 's' : ''}`;
-
-  if (state.loading) { list.innerHTML = loadingHTML(); return; }
-  if (!filtered.length) { list.innerHTML = emptyHTML('No issues found', 'Log a new issue from the + tab'); return; }
-
-  list.innerHTML = filtered.map(i => issueCardHTML(i)).join('');
+// ── ISSUES ────────────────────────────────────────────────────────────
+function issueMatches(i) {
+  if (state.pendingDelete?.id === i.id) return false;
+  if (state.issueStatus === 'active' && !isOpen(i)) return false;
+  if (state.issueStatus === 'in progress' && i.status !== 'in progress') return false;
+  if (state.issueStatus === 'resolved' && i.status !== 'resolved') return false;
+  const s = state.byId.get(i.store_id);
+  if (state.issueAccount && s?.account !== state.issueAccount) return false;
+  if (state.issueCategory && i.category !== state.issueCategory) return false;
+  if (state.issueSearch) {
+    const q = state.issueSearch;
+    if (![i.description, i.store_id, s?.name, s?.address, i.assignee].some((v) => String(v || '').toLowerCase().includes(q))) return false;
+  }
+  return true;
 }
 
-function issueCardHTML(i) {
-  const storeName = i.stores?.name || i.store_id;
-  const acct = i.stores?.account || '';
-  const cls = ACCOUNT_CLASS[acct] || '';
-  const statusClass = i.status === 'in progress' ? 'inprogress' : i.status;
-  const cardClass = i.status === 'in progress' ? 'in-progress' : i.status;
-  const sbClass = i.status === 'in progress' ? 'sb-inprogress' : `sb-${i.status}`;
-  const resolveBtn = i.status !== 'resolved'
-    ? `<button class="action-btn resolve" onclick="resolveIssue(${i.id})">✓ Resolve</button>` : '';
-  return `<div class="issue-card ${cardClass}" id="issue-${i.id}">
+function renderIssues() {
+  const list = $('issueList');
+  if (!state.loaded) { list.innerHTML = loadingHTML('Loading issues…'); return; }
+  const rows = visibleIssues().filter(issueMatches).sort(issueSort);
+  $('issueCount').textContent = `${rows.length} issue${rows.length === 1 ? '' : 's'}`;
+  list.innerHTML = rows.length ? rows.map((i) => issueCardHTML(i)).join('')
+    : emptyHTML(state.issueStatus === 'active' ? 'Nothing open' : 'No issues match', state.issueStatus === 'active' ? 'Every store is clear right now.' : 'Try another filter.');
+}
+
+// Open first (oldest first among open), then most recent resolved.
+function issueSort(a, b) {
+  const ao = isOpen(a), bo = isOpen(b);
+  if (ao !== bo) return ao ? -1 : 1;
+  if (ao) return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+  return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+}
+
+function issueCardHTML(i, { showPoints = false, showStore = true } = {}) {
+  const s = state.byId.get(i.store_id);
+  const age = daysSince(i.date);
+  const open = isOpen(i);
+  const statusCls = 'status-' + i.status.replace(' ', '-');
+  const ageText = open ? (age === 0 ? 'Today' : `${age} day${age === 1 ? '' : 's'} open`) : `Logged ${fmtDate(i.date)}`;
+  const pts = showPoints ? issuePoints(i) : 0;
+  const actions = [];
+  if (i.status === 'open') actions.push(`<button class="btn btn-sm" data-act="status" data-id="${i.id}" data-to="in progress">Start</button>`);
+  if (open) actions.push(`<button class="btn btn-sm resolve" data-act="status" data-id="${i.id}" data-to="resolved"><i class="ti ti-check" aria-hidden="true"></i>Resolve</button>`);
+  else actions.push(`<button class="btn btn-sm" data-act="status" data-id="${i.id}" data-to="open">Reopen</button>`);
+  actions.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
+  actions.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
+  return `<article class="issue-card ${open ? '' : 'resolved'}">
     <div class="issue-top">
-      <div class="issue-store-name">${storeName}</div>
-      <div class="issue-date">${i.date}</div>
+      ${showStore ? `<div class="issue-store">${esc(s?.name || i.store_id)} <small>${esc(city(s))}</small></div>` : `<div class="issue-store">${esc(fmtDate(i.date))}</div>`}
+      <div class="issue-age ${open && age > 60 ? 'old' : ''}">${esc(ageText)}</div>
     </div>
     <div class="issue-tags">
-      ${acct ? `<span class="tag tag-acct tag-${cls}">${acct}</span>` : ''}
-      <span class="tag">${i.category}</span>
-      ${i.assignee ? `<span class="tag">→ ${i.assignee}</span>` : ''}
+      <span class="tag ${statusCls}">${esc(cap(i.status))}</span>
+      <span class="tag ${i.category === 'Safety' ? 'safety' : ''}">${esc(i.category)}</span>
+      ${i.assignee ? `<span class="tag">${esc(i.assignee)}</span>` : ''}
+      ${showPoints && pts ? `<span class="tag pts">${pts > 0 ? '−' + fmtPts(pts) : '+' + fmtPts(-pts)} pts</span>` : ''}
     </div>
-    <div class="issue-desc">${i.description}</div>
-    <div class="issue-footer">
-      <span class="status-badge ${sbClass}">${i.status.toUpperCase()}</span>
-      <div class="issue-actions">
-        ${resolveBtn}
-        <button class="action-btn del" onclick="deleteIssue(${i.id})">✕</button>
-      </div>
-    </div>
-  </div>`;
+    <p class="issue-desc">${esc(i.description)}</p>
+    <div class="issue-actions">${actions.join('')}</div>
+  </article>`;
 }
 
-// ── DETAIL SCREEN ─────────────────────────────────────────────────────
-window.openStoreDetail = async function(storeId) {
-  const store = state.stores.find(s => s.id === storeId);
-  if (!store) return;
-  state.selectedStore = store;
-  setLoading(true);
-  state.issues = await db.getIssues({ storeId });
-  setLoading(false);
+// ── STORE DETAIL ──────────────────────────────────────────────────────
+function openStore(id) {
+  if (!state.byId.has(id)) return;
+  state.selectedId = id;
   switchScreen('detail');
-};
+}
 
 function renderDetail() {
-  const s = state.selectedStore;
-  if (!s) return;
+  const s = state.byId.get(state.selectedId);
+  if (!s) { switchScreen('stores'); return; }
+  const issues = issuesFor(s.id).filter((i) => state.pendingDelete?.id !== i.id).sort(issueSort);
+  const score = healthScore(issues);
+  const open = issues.filter(isOpen);
+  const oldest = open.reduce((m, i) => Math.max(m, daysSince(i.date)), 0);
 
-  document.getElementById('detailTitle').textContent = s.name;
-  document.getElementById('detailSub').textContent = `${s.id} · ${s.account} · ${s.state}`;
+  $('detailTitle').textContent = s.name;
+  $('detailSub').textContent = `${city(s)} · ${s.account}${isActiveStore(s) ? '' : ' · inactive'}`;
+  $('detailScore').className = `score score-ring ${band(score)}`;
+  $('detailScore').style.setProperty('--v', score);
+  $('detailScore').innerHTML = `<span>${score}</span>`;
+  $('detailScore').setAttribute('aria-label', `Health score ${score} out of 100`);
 
-  const activeBtn = document.getElementById('detailActiveBtn');
-  activeBtn.textContent = s.active === false ? '⚑ Set Active' : '⊘ Set Inactive';
-  activeBtn.className = `action-btn ${s.active === false ? 'resolve' : 'del'}`;
-  activeBtn.onclick = () => toggleStoreActive(s.id, s.active);
+  const btn = $('detailActiveBtn');
+  btn.textContent = isActiveStore(s) ? 'Mark inactive' : 'Mark active';
+  btn.onclick = () => toggleStoreActive(s);
 
-  const counts = state.issueCounts[s.id] || { open: 0, total: 0 };
-  const resolved = state.issues.filter(i => i.status === 'resolved').length;
-  document.getElementById('detailOpen').innerHTML = `<div class="dstat-val ${counts.open > 0 ? 'warn' : 'ok'}">${counts.open}</div><div class="dstat-label">Open</div>`;
-  document.getElementById('detailResolved').innerHTML = `<div class="dstat-val ok">${resolved}</div><div class="dstat-label">Resolved</div>`;
-  document.getElementById('detailTotal').innerHTML = `<div class="dstat-val">${state.issues.length}</div><div class="dstat-label">Total</div>`;
+  $('detailStats').innerHTML = `
+    <div class="stat ${open.length ? 'bad' : 'ok'}"><b>${open.length}</b><span>Open</span></div>
+    <div class="stat"><b>${issues.length - open.length}</b><span>Resolved</span></div>
+    <div class="stat ${oldest > 60 ? 'warn' : ''}"><b>${open.length ? oldest : '—'}</b><span>Oldest open, days</span></div>`;
 
-  const list = document.getElementById('detailIssueList');
-  if (!state.issues.length) { list.innerHTML = emptyHTML('No issues logged', 'Tap "Log issue" to add one'); return; }
-  list.innerHTML = state.issues.map(i => issueCardHTML(i)).join('');
+  $('detailIssueList').innerHTML = issues.length
+    ? issues.map((i) => issueCardHTML(i, { showPoints: true, showStore: false })).join('')
+    : emptyHTML('No issues logged', 'Log one with the button above.');
 }
 
-// ── LOG ISSUE ─────────────────────────────────────────────────────────
+// ── LOG / EDIT ────────────────────────────────────────────────────────
 function populateLogStores() {
-  const sel = document.getElementById('logStoreId');
-  const sorted = [...state.stores].sort((a, b) => a.account.localeCompare(b.account) || a.name.localeCompare(b.name));
-  sel.innerHTML = '<option value="">Select store…</option>' +
-    sorted.map(s => `<option value="${s.id}">${s.id} — ${s.name}</option>`).join('');
+  const sel = $('logStoreId');
+  const keep = sel.value;
+  const editing = $('logEditId').value;
+  const stores = state.stores.filter((s) => isActiveStore(s) || s.id === keep)
+    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  const groups = new Map();
+  stores.forEach((s) => { if (!groups.has(s.account)) groups.set(s.account, []); groups.get(s.account).push(s); });
+  sel.innerHTML = '<option value="">Select store…</option>' + [...groups.entries()].map(([a, rows]) =>
+    `<optgroup label="${esc(a)}">${rows.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('')}</optgroup>`).join('');
+  sel.value = keep;
+  $('logTitle').textContent = editing ? 'Edit issue' : 'Log issue';
+  $('logSub').textContent = editing ? 'Change any field and save' : 'Report a store problem';
+  $('logSubmitBtn').textContent = editing ? 'Save changes' : 'Log issue';
+  $('logCancelBtn').hidden = !editing;
 }
 
-async function handleLogIssue(e) {
+function resetLogForm() {
+  $('logForm').reset();
+  $('logEditId').value = '';
+  $('logStoreId').value = '';
+  $('logDate').value = today();
+  $('logError').hidden = true;
+}
+
+function editIssue(id) {
+  const i = state.issues.find((x) => x.id === id);
+  if (!i) return;
+  resetLogForm();
+  $('logEditId').value = String(i.id);
+  populateLogStores();
+  $('logStoreId').value = i.store_id;
+  $('logCategory').value = i.category;
+  $('logDate').value = i.date;
+  $('logDesc').value = i.description;
+  $('logStatus').value = i.status;
+  $('logAssignee').value = i.assignee || '';
+  switchScreen('log');
+}
+
+async function handleSaveIssue(e) {
   e.preventDefault();
-  const storeId = document.getElementById('logStoreId').value;
-  const desc = document.getElementById('logDesc').value.trim();
-  if (!storeId || !desc) { showToast('Store and description required', 'error'); return; }
-
-  const btn = document.getElementById('logSubmitBtn');
-  btn.disabled = true; btn.textContent = 'Saving…';
-
-  try {
-    await db.addIssue({
-      store_id: storeId,
-      category: document.getElementById('logCategory').value,
-      date: document.getElementById('logDate').value || new Date().toISOString().split('T')[0],
-      description: desc,
-      status: document.getElementById('logStatus').value,
-      assignee: document.getElementById('logAssignee').value.trim() || null
-    });
-    showToast('Issue logged ✓', 'success');
-    document.getElementById('logForm').reset();
-    document.getElementById('logDate').valueAsDate = new Date();
-    await loadAll();
-    renderHeader();
-  } catch (err) {
-    showToast('Failed to save — try again', 'error');
+  const storeId = $('logStoreId').value;
+  const desc = $('logDesc').value.trim();
+  if (!storeId || !desc) {
+    const err = $('logError');
+    err.textContent = !storeId ? 'Pick a store first.' : 'Describe what needs attention.';
+    err.hidden = false;
+    return;
   }
-  btn.disabled = false; btn.textContent = 'Log Issue';
+  const editId = Number($('logEditId').value) || null;
+  const row = {
+    store_id: storeId,
+    category: $('logCategory').value,
+    date: $('logDate').value || today(),
+    description: desc,
+    status: $('logStatus').value,
+    assignee: $('logAssignee').value.trim() || null
+  };
+  const btn = $('logSubmitBtn');
+  btn.disabled = true;
+  try {
+    if (editId) await db.updateIssue(editId, { ...row, updated_at: new Date().toISOString() });
+    else await db.addIssue(row);
+    showToast(editId ? 'Issue updated' : 'Issue logged');
+    resetLogForm();
+    await loadAll();
+    state.selectedId = storeId;
+    switchScreen('detail');
+  } catch (err) {
+    showToast("Couldn't save. Check your connection and try again.", { error: true });
+  }
+  btn.disabled = false;
 }
 
-// ── RESOLVE / DELETE ──────────────────────────────────────────────────
-window.resolveIssue = async function(id) {
+// ── STATUS / DELETE ───────────────────────────────────────────────────
+async function setStatus(id, to) {
+  const i = state.issues.find((x) => x.id === id);
+  if (!i) return;
+  const from = i.status;
+  i.status = to; rerender();
   try {
-    await db.updateIssue(id, { status: 'resolved', updated_at: new Date().toISOString() });
-    showToast('Marked resolved ✓', 'success');
-    await loadAll();
-    if (state.activeScreen === 'detail') renderDetail();
-    else renderIssues();
-    renderHeader();
-  } catch { showToast('Failed to update', 'error'); }
-};
+    await db.updateIssue(id, { status: to, updated_at: new Date().toISOString() });
+    showToast(to === 'resolved' ? 'Marked resolved' : to === 'in progress' ? 'Marked in progress' : 'Reopened', {
+      action: 'Undo', onAction: () => setStatus(id, from)
+    });
+  } catch {
+    i.status = from; rerender();
+    showToast("Couldn't update. Try again.", { error: true });
+  }
+}
 
-window.deleteIssue = async function(id) {
-  if (!confirm('Delete this issue?')) return;
+function deleteIssue(id) {
+  commitPendingDelete();
+  const i = state.issues.find((x) => x.id === id);
+  if (!i) return;
+  const timer = setTimeout(commitPendingDelete, 5000);
+  state.pendingDelete = { id, timer };
+  rerender();
+  showToast('Issue deleted', { action: 'Undo', duration: 5000, onAction: () => {
+    clearTimeout(timer); state.pendingDelete = null; rerender();
+  } });
+}
+
+async function commitPendingDelete() {
+  const p = state.pendingDelete;
+  if (!p) return;
+  clearTimeout(p.timer);
+  state.pendingDelete = null;
   try {
-    await db.deleteIssue(id);
-    showToast('Issue deleted', 'success');
-    state.issues = state.issues.filter(i => i.id !== id);
-    await loadAll();
-    if (state.activeScreen === 'detail') renderDetail();
-    else renderIssues();
-    renderHeader();
-  } catch { showToast('Failed to delete', 'error'); }
-};
+    await db.deleteIssue(p.id);
+    state.issues = state.issues.filter((x) => x.id !== p.id);
+  } catch {
+    showToast("Couldn't delete. Try again.", { error: true });
+  }
+  rerender();
+}
+window.addEventListener('pagehide', () => { if (state.pendingDelete) commitPendingDelete(); });
 
-window.toggleStoreActive = async function(id, currentActive) {
-  const newActive = currentActive === false ? true : false;
+async function toggleStoreActive(s) {
+  const next = !isActiveStore(s);
   try {
-    await db.toggleActive(id, newActive);
-    const store = state.stores.find(s => s.id === id);
-    if (store) store.active = newActive;
-    if (state.selectedStore?.id === id) state.selectedStore.active = newActive;
-    showToast(newActive ? 'Store set active ✓' : 'Store set inactive', newActive ? 'success' : 'error');
-    renderDetail();
-    renderStores();
-  } catch { showToast('Failed to update', 'error'); }
-};
-
+    await db.toggleActive(s.id, next);
+    s.active = next;
+    showToast(next ? `${s.name} marked active` : `${s.name} marked inactive`, { action: 'Undo', onAction: () => toggleStoreActive(s) });
+    renderAccountControls();
+    rerender();
+  } catch {
+    showToast("Couldn't update the store. Try again.", { error: true });
+  }
+}
 
 async function handleAddStore() {
-  const id = document.getElementById('newStoreId').value.trim().toUpperCase();
-  const name = document.getElementById('newStoreName').value.trim();
-  if (!id || !name) { showToast('ID and name required', 'error'); return; }
+  const account = $('newStoreAccount').value;
+  const num = $('newStoreNum').value.trim().replace(/^#/, '');
+  const cityName = $('newStoreCity').value.trim();
+  const st = $('newStoreState').value;
+  const err = $('storeError');
+  if (!num || !cityName) { err.textContent = 'Enter the store number and city.'; err.hidden = false; return; }
+  err.hidden = true;
+  const id = `${ACCOUNT_CODES[account] || 'XX'}-${num}`;
   try {
-    await db.addStore({
-      id, name,
-      account: document.getElementById('newStoreAccount').value,
-      state: document.getElementById('newStoreState').value,
-      address: document.getElementById('newStoreAddress').value.trim() || null
-    });
-    showToast('Store added ✓', 'success');
-    closeModal('addStoreModal');
-    ['newStoreId','newStoreName','newStoreAddress'].forEach(f => document.getElementById(f).value = '');
+    await db.addStore({ id, name: `${account} #${num}`, account, state: st, address: `${cityName}, ${st}`, active: true });
+    closeSheet('addStoreModal');
+    ['newStoreNum', 'newStoreCity'].forEach((f) => { $(f).value = ''; });
     await loadAll();
-    renderStores();
-    renderHeader();
+    showToast(`${account} #${num} added`);
+    rerender();
   } catch (e) {
-    showToast(e.message.includes('duplicate') ? 'Store ID already exists' : 'Failed to add store', 'error');
+    err.textContent = String(e.message || '').includes('duplicate') ? `Store ${id} already exists.` : "Couldn't add the store. Try again.";
+    err.hidden = false;
   }
-}
-
-// ── HEADER ────────────────────────────────────────────────────────────
-function renderHeader() {
-  const totalOpen = Object.values(state.issueCounts).reduce((sum, c) => sum + c.open, 0);
-  document.getElementById('headerStats').innerHTML = `
-    <div class="hstat"><b>${state.stores.length}</b> stores</div>
-    <div class="hstat ${totalOpen > 0 ? 'warn' : ''}"><b>${totalOpen}</b> open</div>
-  `;
-}
-
-// ── HELPERS ───────────────────────────────────────────────────────────
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-window.openModal = openModal; window.closeModal = closeModal;
-
-function setLoading(val) { state.loading = val; }
-
-function showToast(msg, type = 'success') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = `toast ${type} show`;
-  setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-function loadingHTML() {
-  return `<div class="loading"><div class="spinner"></div>Loading…</div>`;
-}
-
-function emptyHTML(text, sub = '') {
-  return `<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">${text}</div>${sub ? `<div class="empty-sub">${sub}</div>` : ''}</div>`;
 }
 
 // ── REPORTS ───────────────────────────────────────────────────────────
-let reportPeriod = 'week';
-let trendChartInstance = null;
+let trendChart = null;
 
-window.setReportPeriod = function(period, el) {
-  reportPeriod = period;
-  document.querySelectorAll('#scReports .chip').forEach(c => c.classList.remove('active'));
-  el.classList.add('active');
-  renderReports();
-};
-
-function getReportIssues() {
-  const now = new Date();
-  let cutoff = null;
-  if (reportPeriod === 'week') {
-    cutoff = new Date(now); cutoff.setDate(now.getDate() - 7);
-  } else if (reportPeriod === 'month') {
-    cutoff = new Date(now); cutoff.setMonth(now.getMonth() - 1);
-  }
-  if (!cutoff) return state.issues;
-  const cutoffStr = cutoff.toISOString().split('T')[0];
-  return state.issues.filter(i => i.date >= cutoffStr);
+function periodIssues() {
+  const base = state.issues.filter((i) => isActiveStore(state.byId.get(i.store_id)));
+  if (state.reportPeriod === 'all') return base;
+  const days = state.reportPeriod === 'week' ? 7 : 30;
+  return base.filter((i) => daysSince(i.date) < days);
 }
 
 function renderReports() {
-  const issues = getReportIssues();
-  const label = reportPeriod === 'week' ? 'Last 7 days' : reportPeriod === 'month' ? 'Last 30 days' : 'All time';
-  document.getElementById('reportsSub').textContent = `${label} · ${issues.length} issues`;
+  if (!state.loaded) return;
+  const issues = periodIssues();
+  const label = { week: 'Last 7 days', month: 'Last 30 days', all: 'All time' }[state.reportPeriod];
+  $('reportsSub').textContent = `${label} · ${issues.length} issue${issues.length === 1 ? '' : 's'} logged`;
 
-  // KPIs
-  const open = issues.filter(i => i.status === 'open').length;
-  const inprog = issues.filter(i => i.status === 'in progress').length;
-  const resolved = issues.filter(i => i.status === 'resolved').length;
-  document.getElementById('reportKpis').innerHTML = `
-    <div class="report-kpi"><div class="report-kpi-val" style="color:var(--warn)">${open}</div><div class="report-kpi-label">Open</div></div>
-    <div class="report-kpi"><div class="report-kpi-val" style="color:#facc15">${inprog}</div><div class="report-kpi-label">In Progress</div></div>
-    <div class="report-kpi"><div class="report-kpi-val" style="color:var(--accent)">${resolved}</div><div class="report-kpi-label">Resolved</div></div>
-  `;
+  const openNow = state.issues.filter((i) => isOpen(i) && isActiveStore(state.byId.get(i.store_id))).length;
+  $('reportKpis').innerHTML = `
+    <div class="stat"><b>${issues.length}</b><span>Logged</span></div>
+    <div class="stat ok"><b>${issues.filter((i) => i.status === 'resolved').length}</b><span>Of those resolved</span></div>
+    <div class="stat ${openNow ? 'bad' : ''}"><b>${openNow}</b><span>Open now</span></div>`;
 
-  // By account
-  const acctMap = {};
-  issues.forEach(i => {
-    const acct = i.stores?.account || 'Unknown';
-    if (!acctMap[acct]) acctMap[acct] = { open: 0, total: 0 };
-    acctMap[acct].total++;
-    if (i.status !== 'resolved') acctMap[acct].open++;
-  });
-  const acctColors = { 'Giant Food':'#00e5a0','Wegmans':'#0099ff','Solidcore':'#c084fc','Food Lion':'#fb923c','Office Depot':'#60a5fa','Zara':'#f472b6' };
-  const maxAcct = Math.max(...Object.values(acctMap).map(v => v.total), 1);
-  document.getElementById('reportByAccount').innerHTML = Object.entries(acctMap)
-    .sort((a,b) => b[1].total - a[1].total)
-    .map(([acct, v]) => `
-      <div class="report-bar-row">
-        <div class="report-bar-label">${acct}</div>
-        <div class="report-bar-wrap"><div class="report-bar-fill" style="width:${Math.round(v.total/maxAcct*100)}%;background:${acctColors[acct]||'var(--accent)'}"></div></div>
-        <div class="report-bar-count">${v.total}</div>
-      </div>`).join('') || '<div class="empty-text" style="padding:12px 0">No data</div>';
+  const ranked = state.stores.filter(isActiveStore).map((s) => ({ s, score: scoreFor(s.id) }))
+    .sort((a, b) => a.score - b.score || storeNum(a.s) - storeNum(b.s));
+  $('reportRanking').innerHTML = ranked.map(({ s, score }) => `
+    <button class="rank-row" data-act="store" data-id="${esc(s.id)}">
+      <span class="rank-name">${esc(s.name)} <small>${esc(city(s))}</small></span>
+      <span class="rank-val" style="color:var(--${band(score)})">${score}</span>
+      <span class="rank-bar"><i style="width:${score}%;background:var(--${band(score)})"></i></span>
+    </button>`).join('') || emptyHTML('No active stores');
 
-  // By category
-  const catMap = {};
-  issues.forEach(i => {
-    catMap[i.category] = (catMap[i.category] || 0) + 1;
-  });
-  const maxCat = Math.max(...Object.values(catMap), 1);
-  document.getElementById('reportByCategory').innerHTML = Object.entries(catMap)
-    .sort((a,b) => b[1] - a[1])
-    .map(([cat, count]) => `
-      <div class="report-bar-row">
-        <div class="report-bar-label">${cat}</div>
-        <div class="report-bar-wrap"><div class="report-bar-fill" style="width:${Math.round(count/maxCat*100)}%;background:var(--blue)"></div></div>
-        <div class="report-bar-count">${count}</div>
-      </div>`).join('') || '<div class="empty-text" style="padding:12px 0">No data</div>';
+  const cat = {};
+  issues.forEach((i) => { cat[i.category] = (cat[i.category] || 0) + 1; });
+  const max = Math.max(1, ...Object.values(cat));
+  $('reportByCategory').innerHTML = Object.entries(cat).sort((a, b) => b[1] - a[1]).map(([c, n]) => `
+    <div class="bar-row"><span>${esc(c)}</span><span class="bar-track"><i style="width:${Math.round(n / max * 100)}%"></i></span><span class="bar-n">${n}</span></div>`).join('')
+    || `<p class="section-note">No issues logged in this period.</p>`;
 
-  // Top stores
-  const storeMap = {};
-  issues.forEach(i => {
-    if (!storeMap[i.store_id]) storeMap[i.store_id] = { open: 0, total: 0, name: i.stores?.name || i.store_id, acct: i.stores?.account || '' };
-    storeMap[i.store_id].total++;
-    if (i.status !== 'resolved') storeMap[i.store_id].open++;
-  });
-  const topStores = Object.entries(storeMap).sort((a,b) => b[1].open - a[1].open).slice(0, 8);
-  document.getElementById('reportTopStores').innerHTML = topStores.length
-    ? topStores.map(([id, v]) => `
-      <div class="report-store-row" onclick="openStoreDetail('${id}')">
-        <div>
-          <div class="report-store-name">${v.name}</div>
-          <div class="report-store-meta">${v.acct} · ${v.total} total</div>
-        </div>
-        <span class="issue-pill ${v.open > 0 ? 'pill-open' : 'pill-ok'}">${v.open > 0 ? v.open + ' open' : '✓ clear'}</span>
-      </div>`).join('')
-    : '<div class="empty-text" style="padding:12px 0;color:var(--muted);font-size:13px">No issues in this period</div>';
-
-  // Trend chart
-  renderTrendChart(issues);
+  renderTrend();
 }
 
-function renderTrendChart(issues) {
-  const canvas = document.getElementById('trendChart');
-  if (!canvas) return;
-
-  // Build daily buckets for last 14 days
-  const days = 14;
-  const buckets = {};
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const key = d.toISOString().split('T')[0];
-    buckets[key] = { logged: 0, resolved: 0 };
-  }
-  issues.forEach(i => {
-    if (buckets[i.date]) buckets[i.date].logged++;
-    if (i.status === 'resolved' && buckets[i.date]) buckets[i.date].resolved++;
-  });
-
-  const labels = Object.keys(buckets).map(d => d.slice(5)); // MM-DD
-  const logged = Object.values(buckets).map(b => b.logged);
-  const resolved = Object.values(buckets).map(b => b.resolved);
-
-  if (trendChartInstance) { trendChartInstance.destroy(); trendChartInstance = null; }
-
-  if (typeof Chart === 'undefined') return;
-
-  trendChartInstance = new Chart(canvas, {
+function renderTrend() {
+  const canvas = $('trendChart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  const css = getComputedStyle(document.documentElement);
+  const v = (n) => css.getPropertyValue(n).trim();
+  const keys = [];
+  for (let d = 13; d >= 0; d--) { const x = new Date(); x.setDate(x.getDate() - d); keys.push(x.toISOString().split('T')[0]); }
+  const active = state.issues.filter((i) => isActiveStore(state.byId.get(i.store_id)));
+  const logged = keys.map((k) => active.filter((i) => i.date === k).length);
+  const resolved = keys.map((k) => active.filter((i) => i.status === 'resolved' && (i.updated_at || '').slice(0, 10) === k).length);
+  const labels = keys.map((k) => fmtDate(k));
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(canvas, {
     type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Logged', data: logged, backgroundColor: '#ff6b3588', borderRadius: 3 },
-        { label: 'Resolved', data: resolved, backgroundColor: '#00e5a066', borderRadius: 3 }
-      ]
-    },
+    data: { labels, datasets: [
+      { label: 'Logged', data: logged, backgroundColor: v('--warn'), borderRadius: 3 },
+      { label: 'Resolved', data: resolved, backgroundColor: v('--ok'), borderRadius: 3 }
+    ] },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#6b7785', font: { size: 11 } } } },
+      plugins: { legend: { labels: { color: v('--muted'), boxWidth: 10, font: { size: 12 } } } },
       scales: {
-        x: { ticks: { color: '#6b7785', font: { size: 10 } }, grid: { color: '#2a3038' } },
-        y: { ticks: { color: '#6b7785', font: { size: 10 }, stepSize: 1 }, grid: { color: '#2a3038' }, beginAtZero: true }
+        x: { ticks: { color: v('--muted'), maxRotation: 0, autoSkip: true, maxTicksLimit: 7, font: { size: 11 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { color: v('--muted'), precision: 0, font: { size: 11 } }, grid: { color: v('--border') } }
       }
     }
   });
 }
+
+// ── HELPERS ───────────────────────────────────────────────────────────
+function openSheet(id) { $(id).classList.add('open'); }
+function closeSheet(id) { $(id).classList.remove('open'); }
+
+let toastTimer = null;
+function showToast(msg, { error = false, action = null, onAction = null, duration = 3500 } = {}) {
+  const t = $('toast');
+  $('toastMsg').textContent = msg;
+  const b = $('toastAction');
+  b.hidden = !action;
+  b.textContent = action || '';
+  b.onclick = () => { t.classList.remove('show'); onAction && onAction(); };
+  t.className = `toast show${error ? ' error' : ''}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), duration);
+}
+
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const fmtPts = (n) => (Math.round(n * 10) / 10).toString();
+function fmtDate(d) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(y, m - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+const loadingHTML = (t) => `<div class="loading"><div class="spinner"></div>${esc(t)}</div>`;
+const emptyHTML = (t, sub = '') => `<div class="empty"><b>${esc(t)}</b>${sub ? esc(sub) : ''}</div>`;

@@ -4,313 +4,251 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="OpsBase">
-  <meta name="theme-color" content="#0d0f11">
-  <meta name="description" content="Field operations hub — store management and issue tracking">
+  <meta name="theme-color" content="#f4f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121513" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Field operations hub — store health and issue tracking">
   <title>OpsBase</title>
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="/css/app.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
 </head>
 <body>
 <div id="app">
 
-  <!-- HEADER -->
   <header class="header">
-    <div class="header-logo">OPS<span>BASE</span></div>
-    <div class="header-stats" id="headerStats">
-      <div class="hstat"><b>—</b> stores</div>
-    </div>
+    <div class="brand">OpsBase</div>
+    <div class="header-stats" id="headerStats"></div>
   </header>
 
-  <!-- MAIN -->
   <main class="main">
 
-    <!-- ── STORES SCREEN ── -->
-    <div class="screen active" id="scStores">
-      <div class="page-header">
+    <!-- STORES -->
+    <section class="screen active" id="scStores" aria-labelledby="storesTitle">
+      <div class="page-head">
         <div>
-          <div class="page-title">Stores</div>
-          <div class="page-sub">74 locations · 6 accounts</div>
+          <h1 class="page-title" id="storesTitle">Stores</h1>
+          <p class="page-sub" id="storesSub">Loading…</p>
         </div>
-        <button class="log-btn" id="addStoreBtn">+ Add</button>
+        <button class="btn btn-ghost" id="addStoreBtn"><i class="ti ti-plus" aria-hidden="true"></i>Add store</button>
       </div>
 
-      <div class="search-row">
-        <div class="search-wrap">
-          <i class="ti ti-search search-icon"></i>
-          <input type="text" id="storeSearch" placeholder="Search stores…">
-        </div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;flex-shrink:0">
-          <input type="checkbox" id="activeOnlyToggle" onchange="loadAll()" style="width:auto;height:auto;accent-color:var(--accent)">
-          Active only
+      <div class="toolbar">
+        <label class="search">
+          <i class="ti ti-search" aria-hidden="true"></i>
+          <input type="search" id="storeSearch" placeholder="Store #, city or name" aria-label="Search stores">
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="showInactive">
+          <span>Show inactive</span>
         </label>
       </div>
+      <div class="chips" id="storeChips" role="tablist" aria-label="Account"></div>
 
-      <div class="filter-scroll" id="storeChips">
-        <button class="chip active" data-val="all">All</button>
-        <button class="chip" data-val="Giant Food">Giant Food</button>
-        <button class="chip" data-val="Wegmans">Wegmans</button>
-        <button class="chip" data-val="Solidcore">Solidcore</button>
-        <button class="chip" data-val="Food Lion">Food Lion</button>
-        <button class="chip" data-val="Office Depot">Office Depot</button>
-        <button class="chip" data-val="Zara">Zara</button>
-      </div>
-
-      <div class="store-list" id="storeList">
+      <div id="storeList" class="store-groups">
         <div class="loading"><div class="spinner"></div>Loading stores…</div>
       </div>
-    </div>
+    </section>
 
-    <!-- ── ISSUES SCREEN ── -->
-    <div class="screen" id="scIssues">
-      <div class="page-header">
+    <!-- ISSUES -->
+    <section class="screen" id="scIssues" aria-labelledby="issuesTitle">
+      <div class="page-head">
         <div>
-          <div class="page-title">Issues</div>
-          <div class="page-sub" id="issueCount">Loading…</div>
+          <h1 class="page-title" id="issuesTitle">Issues</h1>
+          <p class="page-sub" id="issueCount">Loading…</p>
         </div>
       </div>
 
-      <div class="search-row" style="gap:8px;flex-wrap:wrap">
-        <div class="search-wrap" style="min-width:150px">
-          <i class="ti ti-search search-icon"></i>
-          <input type="text" id="issueSearch" placeholder="Search issues…">
-        </div>
+      <div class="toolbar">
+        <label class="search">
+          <i class="ti ti-search" aria-hidden="true"></i>
+          <input type="search" id="issueSearch" placeholder="Search issues" aria-label="Search issues">
+        </label>
       </div>
-
-      <div style="padding:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap">
-        <select id="issueAcctFilter" style="flex:1;min-width:140px;font-size:13px">
-          <option value="">All accounts</option>
-          <option>Giant Food</option>
-          <option>Wegmans</option>
-          <option>Solidcore</option>
-          <option>Food Lion</option>
-          <option>Office Depot</option>
-          <option>Zara</option>
-        </select>
-        <select id="issueCatFilter" style="flex:1;min-width:120px;font-size:13px">
-          <option value="">All categories</option>
-          <option>Cleaning</option>
-          <option>Equipment</option>
-          <option>Safety</option>
-          <option>Access</option>
-          <option>Scheduling</option>
-          <option>Supplies</option>
-          <option>Other</option>
+      <div class="toolbar toolbar-selects">
+        <select id="issueAcctFilter" aria-label="Account"><option value="">All accounts</option></select>
+        <select id="issueCatFilter" aria-label="Type">
+          <option value="">All types</option>
+          <option>Safety</option><option>Cleaning</option><option>Equipment</option>
+          <option>Access</option><option>Scheduling</option><option>Supplies</option><option>Other</option>
         </select>
       </div>
-
-      <div class="filter-scroll" id="issueChips">
-        <button class="chip active" data-val="all">All</button>
-        <button class="chip" data-val="open">Open</button>
-        <button class="chip" data-val="in-progress">In progress</button>
+      <div class="chips" id="issueChips" role="tablist" aria-label="Status">
+        <button class="chip active" data-val="active">Open</button>
+        <button class="chip" data-val="in progress">In progress</button>
         <button class="chip" data-val="resolved">Resolved</button>
+        <button class="chip" data-val="all">All</button>
       </div>
 
       <div class="issue-list" id="issueList">
         <div class="loading"><div class="spinner"></div>Loading issues…</div>
       </div>
-    </div>
+    </section>
 
-    <!-- ── LOG ISSUE SCREEN ── -->
-    <div class="screen" id="scLog">
-      <div class="page-header">
+    <!-- LOG / EDIT ISSUE -->
+    <section class="screen" id="scLog" aria-labelledby="logTitle">
+      <div class="page-head">
         <div>
-          <div class="page-title">Log Issue</div>
-          <div class="page-sub">Report a store problem</div>
+          <h1 class="page-title" id="logTitle">Log issue</h1>
+          <p class="page-sub" id="logSub">Report a store problem</p>
         </div>
       </div>
 
-      <form class="form-screen" id="logForm">
-        <div class="form-group">
-          <label class="form-label">Store</label>
-          <select id="logStoreId" required>
-            <option value="">Select store…</option>
-          </select>
+      <form class="form" id="logForm" novalidate>
+        <input type="hidden" id="logEditId">
+        <div class="field">
+          <label for="logStoreId">Store</label>
+          <select id="logStoreId" required><option value="">Select store…</option></select>
         </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="form-group">
-            <label class="form-label">Category</label>
+        <div class="field-row">
+          <div class="field">
+            <label for="logCategory">Type</label>
             <select id="logCategory">
-              <option>Cleaning</option>
-              <option>Equipment</option>
-              <option>Safety</option>
-              <option>Access</option>
-              <option>Scheduling</option>
-              <option>Supplies</option>
-              <option>Other</option>
+              <option>Cleaning</option><option>Safety</option><option>Equipment</option>
+              <option>Access</option><option>Scheduling</option><option>Supplies</option><option>Other</option>
             </select>
           </div>
-          <div class="form-group">
-            <label class="form-label">Date</label>
+          <div class="field">
+            <label for="logDate">Date</label>
             <input type="date" id="logDate">
           </div>
         </div>
-
-        <div class="form-group">
-          <label class="form-label">Description</label>
-          <textarea id="logDesc" placeholder="Describe the issue…" required></textarea>
+        <div class="field">
+          <label for="logDesc">What needs attention</label>
+          <textarea id="logDesc" rows="4" placeholder="Stairs by Pizza missed two nights; Bonnie asked for both stairways tonight." required></textarea>
+          <p class="field-error" id="logError" hidden></p>
         </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="form-group">
-            <label class="form-label">Status</label>
+        <div class="field-row">
+          <div class="field">
+            <label for="logStatus">Status</label>
             <select id="logStatus">
               <option value="open">Open</option>
               <option value="in progress">In progress</option>
               <option value="resolved">Resolved</option>
             </select>
           </div>
-          <div class="form-group">
-            <label class="form-label">Assigned to</label>
-            <input type="text" id="logAssignee" placeholder="Name (optional)">
+          <div class="field">
+            <label for="logAssignee">Owner</label>
+            <input type="text" id="logAssignee" placeholder="Davron">
           </div>
         </div>
-
-        <button type="submit" class="btn-submit" id="logSubmitBtn">Log Issue</button>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" id="logCancelBtn" hidden>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="logSubmitBtn">Log issue</button>
+        </div>
       </form>
-    </div>
+    </section>
 
-    <!-- ── STORE DETAIL SCREEN ── -->
-    <div class="screen" id="scDetail">
-      <div class="detail-screen">
-        <div class="detail-header">
-          <button class="back-btn" id="backBtn">‹ Back</button>
-          <div style="flex:1;min-width:0">
-            <div class="page-title" id="detailTitle" style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
-            <div class="page-sub" id="detailSub"></div>
-          </div>
-          <button class="action-btn" id="detailActiveBtn"></button>
-        </div>
-
-        <div class="detail-stats">
-          <div class="dstat" id="detailOpen"></div>
-          <div class="dstat" id="detailResolved"></div>
-          <div class="dstat" id="detailTotal"></div>
-        </div>
-
-        <div class="section-row">
-          <span class="section-label">Issue history</span>
-          <button class="log-btn" id="detailLogBtn">+ Log issue</button>
-        </div>
-
-        <div class="issue-list" id="detailIssueList"></div>
+    <!-- STORE DETAIL -->
+    <section class="screen" id="scDetail" aria-labelledby="detailTitle">
+      <div class="detail-head">
+        <button class="back" id="backBtn"><i class="ti ti-chevron-left" aria-hidden="true"></i>Stores</button>
+        <button class="btn btn-ghost btn-sm" id="detailActiveBtn"></button>
       </div>
-    </div>
+      <div class="detail-hero">
+        <div class="score-ring" id="detailScore" aria-label="Health score"></div>
+        <div class="detail-id">
+          <h1 class="page-title" id="detailTitle"></h1>
+          <p class="page-sub" id="detailSub"></p>
+        </div>
+      </div>
+      <div class="stat-row" id="detailStats"></div>
 
+      <div class="section-head">
+        <h2 class="section-title">Issues</h2>
+        <button class="btn btn-primary btn-sm" id="detailLogBtn"><i class="ti ti-plus" aria-hidden="true"></i>Log issue</button>
+      </div>
+      <div class="issue-list" id="detailIssueList"></div>
+    </section>
 
-    <!-- ── REPORTS SCREEN ── -->
-    <div class="screen" id="scReports">
-      <div class="page-header">
+    <!-- REPORTS -->
+    <section class="screen" id="scReports" aria-labelledby="reportsTitle">
+      <div class="page-head">
         <div>
-          <div class="page-title">Reports</div>
-          <div class="page-sub" id="reportsSub">Loading...</div>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="chip active" id="rWeek" onclick="setReportPeriod('week',this)">Week</button>
-          <button class="chip" id="rMonth" onclick="setReportPeriod('month',this)">Month</button>
-          <button class="chip" id="rAll" onclick="setReportPeriod('all',this)">All</button>
+          <h1 class="page-title" id="reportsTitle">Reports</h1>
+          <p class="page-sub" id="reportsSub">Loading…</p>
         </div>
       </div>
-
-      <div style="padding:12px 16px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px" id="reportKpis"></div>
-
-      <div style="padding:0 16px 8px">
-        <div class="section-label" style="margin-bottom:10px">By account</div>
-        <div id="reportByAccount"></div>
+      <div class="chips" id="reportChips" role="tablist" aria-label="Period">
+        <button class="chip active" data-val="week">7 days</button>
+        <button class="chip" data-val="month">30 days</button>
+        <button class="chip" data-val="all">All time</button>
       </div>
 
-      <div style="padding:0 16px 8px;margin-top:8px">
-        <div class="section-label" style="margin-bottom:10px">By category</div>
+      <div class="stat-row" id="reportKpis"></div>
+
+      <div class="report-block">
+        <h2 class="section-title">Health ranking</h2>
+        <p class="section-note">Active stores, worst first. Tap a store to open it.</p>
+        <div id="reportRanking"></div>
+      </div>
+      <div class="report-block">
+        <h2 class="section-title">Issues by type</h2>
         <div id="reportByCategory"></div>
       </div>
-
-      <div style="padding:0 16px 8px;margin-top:8px">
-        <div class="section-label" style="margin-bottom:10px">Top stores by open issues</div>
-        <div id="reportTopStores"></div>
+      <div class="report-block">
+        <h2 class="section-title">Logged vs resolved, last 14 days</h2>
+        <div class="chart-box"><canvas id="trendChart" aria-label="Issues logged and resolved per day for the last 14 days" role="img"></canvas></div>
       </div>
-
-      <div style="padding:0 16px 16px;margin-top:8px">
-        <div class="section-label" style="margin-bottom:10px">Trend</div>
-        <canvas id="trendChart" style="width:100%;height:180px"></canvas>
-      </div>
-    </div>
+    </section>
 
   </main>
 
-  <!-- BOTTOM NAV -->
-  <nav class="bottom-nav">
-    <button class="nav-item active" data-screen="stores">
-      <span class="nav-icon"><i class="ti ti-building-store"></i></span>
-      Stores
-    </button>
-    <button class="nav-item" data-screen="issues">
-      <span class="nav-icon"><i class="ti ti-alert-circle"></i></span>
-      Issues
-    </button>
-    <button class="nav-item" data-screen="log">
-      <span class="nav-icon"><i class="ti ti-circle-plus"></i></span>
-      Log
-    </button>
-    <button class="nav-item" data-screen="reports">
-      <span class="nav-icon"><i class="ti ti-chart-bar"></i></span>
-      Reports
-    </button>
+  <nav class="bottom-nav" aria-label="Main">
+    <button class="nav-item active" data-screen="stores"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>
+    <button class="nav-item" data-screen="issues"><i class="ti ti-alert-circle" aria-hidden="true"></i>Issues<span class="nav-badge" id="navBadge" hidden></span></button>
+    <button class="nav-item" data-screen="log"><i class="ti ti-circle-plus" aria-hidden="true"></i>Log</button>
+    <button class="nav-item" data-screen="reports"><i class="ti ti-chart-bar" aria-hidden="true"></i>Reports</button>
   </nav>
-
 </div>
 
-<!-- ADD STORE MODAL -->
-<div class="modal-overlay" id="addStoreModal">
-  <div class="modal">
-    <div class="modal-handle"></div>
-    <h2>Add store</h2>
-    <div class="form-group mt8">
-      <label class="form-label">Store ID</label>
-      <input type="text" id="newStoreId" placeholder="e.g. GF-044">
-    </div>
-    <div class="form-group mt12">
-      <label class="form-label">Name / Location</label>
-      <input type="text" id="newStoreName" placeholder="e.g. Giant Food - Laurel Hills">
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" class="mt12">
-      <div class="form-group">
-        <label class="form-label">Account</label>
+<!-- ADD STORE -->
+<div class="sheet-overlay" id="addStoreModal">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="addStoreTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="addStoreTitle">Add store</h2>
+    <div class="field-row">
+      <div class="field">
+        <label for="newStoreAccount">Account</label>
         <select id="newStoreAccount">
-          <option>Giant Food</option>
-          <option>Wegmans</option>
-          <option>Solidcore</option>
-          <option>Food Lion</option>
-          <option>Office Depot</option>
-          <option>Zara</option>
+          <option>Wegmans</option><option>Zara</option><option>Office Depot</option>
+          <option>Food Lion</option><option>Giant Food</option><option>Solidcore</option>
         </select>
       </div>
-      <div class="form-group">
-        <label class="form-label">State</label>
+      <div class="field">
+        <label for="newStoreNum">Store number</label>
+        <input type="text" id="newStoreNum" inputmode="numeric" placeholder="125">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="newStoreCity">City</label>
+        <input type="text" id="newStoreCity" placeholder="Owings Mills">
+      </div>
+      <div class="field">
+        <label for="newStoreState">State</label>
         <select id="newStoreState">
-          <option>MD</option><option>PA</option><option>VA</option>
+          <option>MD</option><option>PA</option><option>NJ</option><option>VA</option>
           <option>DC</option><option>DE</option><option>WV</option>
         </select>
       </div>
     </div>
-    <div class="form-group mt12">
-      <label class="form-label">Address (optional)</label>
-      <input type="text" id="newStoreAddress" placeholder="Street address">
-    </div>
-    <div class="modal-footer">
-      <button class="btn-cancel" id="cancelStore">Cancel</button>
-      <button class="btn-save" id="saveStoreBtn">Save store</button>
+    <p class="field-error" id="storeError" hidden></p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="cancelStore">Cancel</button>
+      <button class="btn btn-primary" id="saveStoreBtn">Add store</button>
     </div>
   </div>
 </div>
 
-<!-- TOAST -->
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toastMsg"></span><button id="toastAction" hidden></button></div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script type="module" src="/js/app.js"></script>
 </body>
 </html>
