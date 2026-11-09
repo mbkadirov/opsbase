@@ -1,4 +1,4 @@
-import { db } from './supabase.js';
+import { db, auth } from './supabase.js';
 import { healthScore, issuePoints, daysSince, isOpen, band } from './health.js';
 
 // ── STATE ─────────────────────────────────────────────────────────────
@@ -17,8 +17,20 @@ const state = {
   reportPeriod: 'week',
   selectedId: null,
   loaded: false,
-  pendingDelete: null
+  pendingDelete: null,
+  me: null,
+  starting: false,
+  profiles: [],
+  assignments: [],
+  authMode: 'signin',
+  assignUser: null
 };
+
+const ROLE_LABEL = { admin: 'Admin', supervisor: 'Supervisor', crew_lead: 'Crew lead', pending: 'Pending', disabled: 'Disabled' };
+const STAFF = ['admin', 'supervisor', 'crew_lead'];
+const isAdmin = () => state.me?.role === 'admin';
+const canDelete = () => ['admin', 'supervisor'].includes(state.me?.role);
+const canSeeUsers = () => ['admin', 'supervisor'].includes(state.me?.role);
 
 const ACCOUNT_ORDER = ['Wegmans', 'Zara', 'Office Depot', 'Food Lion', 'Giant Food', 'Solidcore'];
 const ACCOUNT_CODES = { 'Giant Food': 'GF', 'Wegmans': 'WM', 'Solidcore': 'SC', 'Food Lion': 'FL', 'Office Depot': 'OD', 'Zara': 'ZA' };
@@ -34,14 +46,270 @@ const today = () => new Date().toISOString().split('T')[0];
 document.addEventListener('DOMContentLoaded', async () => {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   bindEvents();
+  bindAuthEvents();
   $('logDate').value = today();
-  await loadAll();
-  switchScreen('stores');
+  auth.onChange((event, session) => {
+    if (event === 'PASSWORD_RECOVERY') { $('newPassword').value = ''; openSheet('passwordSheet'); }
+    if (event === 'SIGNED_OUT') showSignedOut();
+    if (event === 'SIGNED_IN' && session && !state.me && !state.starting) setTimeout(() => start(session), 0);
+  });
+  try {
+    const session = await auth.session();
+    if (session) await start(session); else showSignedOut();
+  } catch { showSignedOut(); }
 });
 
-async function loadAll() {
+// ── SIGN-IN FLOW ─────────────────────────────────────────────────────
+async function start(session) {
+  if (state.starting) return;
+  state.starting = true;
   try {
-    const [stores, issues] = await Promise.all([db.getStores(false), db.getIssues()]);
+    let me = null;
+    try { me = await db.myProfile(session.user.id); } catch { /* table missing or offline */ }
+    state.me = me || { id: session.user.id, email: session.user.email, full_name: '', role: 'pending' };
+    if (!STAFF.includes(state.me.role)) { showPending(); return; }
+    document.body.classList.remove('signed-out');
+    renderAvatar();
+    $('addStoreBtn').hidden = !isAdmin();
+    await loadAll();
+    switchScreen('stores');
+  } finally {
+    state.starting = false;
+  }
+}
+
+function showSignedOut() {
+  state.me = null; state.stores = []; state.issues = []; state.byId = new Map(); state.loaded = false;
+  document.body.classList.add('signed-out');
+  setAuthMode('signin');
+  switchScreen('auth');
+}
+
+function showPending() {
+  document.body.classList.add('signed-out');
+  const disabled = state.me?.role === 'disabled';
+  $('pendingTitle').textContent = disabled ? 'Access removed' : 'Waiting for access';
+  $('pendingText').textContent = disabled
+    ? 'Your OpsBase access has been turned off. Contact Murod if you think this is a mistake.'
+    : `You're signed in as ${state.me?.email || 'a new user'}. An admin needs to give you a role before you can see stores. Ask Murod to approve you, then tap Check again.`;
+  switchScreen('pending');
+}
+
+function setAuthMode(mode) {
+  state.authMode = mode;
+  $('authTabs').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === mode));
+  const up = mode === 'signup';
+  $('authTitle').textContent = up ? 'Create account' : 'Sign in';
+  $('authSub').textContent = up ? 'An admin approves new accounts before they can see stores.' : 'Store health and issues for CSG field teams.';
+  $('authNameField').hidden = !up;
+  $('authPassword').autocomplete = up ? 'new-password' : 'current-password';
+  $('authPassword').placeholder = up ? 'At least 8 characters' : '';
+  $('authSubmit').textContent = up ? 'Create account' : 'Sign in';
+  $('authLinks').hidden = up;
+  authMsg();
+}
+
+function authMsg(error = '', note = '') {
+  $('authError').textContent = error; $('authError').hidden = !error;
+  $('authNote').textContent = note; $('authNote').hidden = !note;
+}
+
+function friendlyAuthError(e) {
+  const m = String(e?.message || e || '');
+  if (/invalid login/i.test(m)) return 'Wrong email or password.';
+  if (/not confirmed/i.test(m)) return 'Confirm your email first. Check your inbox for the link we sent.';
+  if (/signups not allowed|user not found/i.test(m)) return 'No account with that email yet. Use Create account.';
+  if (/already registered/i.test(m)) return 'That email already has an account. Sign in instead.';
+  if (/rate limit|too many/i.test(m)) return 'Too many tries. Wait a minute and try again.';
+  if (/password/i.test(m)) return 'Use a password with at least 8 characters.';
+  return "Couldn't reach OpsBase. Check your connection and try again.";
+}
+
+function bindAuthEvents() {
+  chipGroup('authTabs', (v) => setAuthMode(v));
+  $('authForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = $('authEmail').value.trim();
+    const pw = $('authPassword').value;
+    const name = $('authName').value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) return authMsg('Enter your email address.');
+    if (state.authMode === 'signup' && !name) return authMsg('Enter your name.');
+    if (pw.length < 8) return authMsg(state.authMode === 'signup' ? 'Use a password with at least 8 characters.' : 'Enter your password.');
+    const btn = $('authSubmit'); btn.disabled = true; authMsg();
+    try {
+      if (state.authMode === 'signin') {
+        const { session } = await auth.signIn(email, pw);
+        await start(session);
+      } else {
+        const res = await auth.signUp(email, pw, name);
+        if (res.session) await start(res.session);
+        else { setAuthMode('signin'); authMsg('', `Check ${email} for a confirmation link. After you confirm, sign in here and an admin will approve you.`); }
+      }
+    } catch (err) { authMsg(friendlyAuthError(err)); }
+    btn.disabled = false;
+  });
+  $('authLinkBtn').addEventListener('click', async () => {
+    const email = $('authEmail').value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) return authMsg('Enter your email address first.');
+    try { await auth.sendLink(email); authMsg('', `Sign-in link sent to ${email}. Open it on this device.`); }
+    catch (err) { authMsg(friendlyAuthError(err)); }
+  });
+  $('authResetBtn').addEventListener('click', async () => {
+    const email = $('authEmail').value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) return authMsg('Enter your email address first.');
+    try { await auth.sendReset(email); authMsg('', `Password reset link sent to ${email}. Open it, then choose a new password.`); }
+    catch (err) { authMsg(friendlyAuthError(err)); }
+  });
+  $('pendingRefresh').addEventListener('click', async () => {
+    const session = await auth.session().catch(() => null);
+    if (!session) return showSignedOut();
+    state.me = null;
+    await start(session);
+    if (state.me && !STAFF.includes(state.me.role)) showToast('Still waiting for an admin to approve you.');
+  });
+  $('pendingSignOut').addEventListener('click', () => auth.signOut().catch(() => showSignedOut()));
+
+  $('accountBtn').addEventListener('click', openAccount);
+  $('saveAccountBtn').addEventListener('click', saveAccount);
+  $('signOutBtn').addEventListener('click', async () => { closeSheet('accountSheet'); await auth.signOut().catch(() => {}); showSignedOut(); });
+  $('manageUsersBtn').addEventListener('click', () => { closeSheet('accountSheet'); switchScreen('users'); });
+  $('usersBackBtn').addEventListener('click', () => switchScreen('stores'));
+  $('assignCancel').addEventListener('click', () => closeSheet('assignSheet'));
+  $('assignSave').addEventListener('click', saveAssignments);
+  $('pwSave').addEventListener('click', async () => {
+    const pw = $('newPassword').value;
+    if (pw.length < 8) { $('pwError').textContent = 'Use at least 8 characters.'; $('pwError').hidden = false; return; }
+    try { await auth.setPassword(pw); closeSheet('passwordSheet'); showToast('Password saved'); }
+    catch (err) { $('pwError').textContent = friendlyAuthError(err); $('pwError').hidden = false; }
+  });
+  document.addEventListener('change', (e) => {
+    const sel = e.target.closest('select[data-role-for]');
+    if (sel) changeRole(sel.dataset.roleFor, sel.value, sel);
+  });
+}
+
+// ── ACCOUNT ───────────────────────────────────────────────────────────
+const initials = (p) => {
+  const src = (p?.full_name || p?.email || '?').trim();
+  const parts = src.split(/[\s@.]+/).filter(Boolean);
+  return ((parts[0]?.[0] || '?') + (p?.full_name && parts[1] ? parts[1][0] : '')).toUpperCase();
+};
+
+function renderAvatar() {
+  const b = $('accountBtn');
+  b.hidden = !state.me;
+  b.textContent = initials(state.me);
+}
+
+function openAccount() {
+  $('accountWho').textContent = `${state.me.email} · ${ROLE_LABEL[state.me.role] || state.me.role}`;
+  $('accountName').value = state.me.full_name || '';
+  $('accountPassword').value = '';
+  $('accountError').hidden = true;
+  $('manageUsersBtn').hidden = !canSeeUsers();
+  openSheet('accountSheet');
+}
+
+async function saveAccount() {
+  const name = $('accountName').value.trim();
+  const pw = $('accountPassword').value;
+  const err = $('accountError');
+  if (pw && pw.length < 8) { err.textContent = 'Use a password with at least 8 characters.'; err.hidden = false; return; }
+  try {
+    if (name !== (state.me.full_name || '')) { await db.setMyName(name); state.me.full_name = name; renderAvatar(); }
+    if (pw) await auth.setPassword(pw);
+    closeSheet('accountSheet');
+    showToast(pw ? 'Account and password saved' : 'Account saved');
+  } catch (e) { err.textContent = friendlyAuthError(e); err.hidden = false; }
+}
+
+// ── USERS (admin) ─────────────────────────────────────────────────────
+async function renderUsers() {
+  const list = $('userList');
+  if (!canSeeUsers()) { switchScreen('stores'); return; }
+  list.innerHTML = loadingHTML('Loading users…');
+  try {
+    [state.profiles, state.assignments] = await Promise.all([db.getProfiles(), db.getAssignments()]);
+  } catch {
+    list.innerHTML = emptyHTML("Couldn't load users", 'Check your connection and try again.');
+    return;
+  }
+  const order = { pending: 0, admin: 1, supervisor: 2, crew_lead: 3, disabled: 4 };
+  const people = [...state.profiles].sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || String(a.full_name || a.email).localeCompare(String(b.full_name || b.email)));
+  const waiting = people.filter((p) => p.role === 'pending').length;
+  $('usersSub').textContent = `${people.length} user${people.length === 1 ? '' : 's'}${waiting ? ` · ${waiting} waiting for approval` : ''}`;
+  list.innerHTML = people.map((p) => {
+    const self = p.id === state.me.id;
+    const stores = state.assignments.filter((a) => a.user_id === p.id).map((a) => state.byId.get(a.store_id)?.name || a.store_id);
+    const roleCtl = isAdmin() && !self
+      ? `<select data-role-for="${esc(p.id)}" aria-label="Role for ${esc(p.full_name || p.email)}">${Object.entries(ROLE_LABEL).map(([v, l]) => `<option value="${v}" ${p.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`
+      : `<span class="tag role-${esc(p.role)}">${esc(ROLE_LABEL[p.role] || p.role)}${self ? ' · you' : ''}</span>`;
+    return `<article class="user-card ${p.role === 'pending' ? 'pending' : ''}">
+      <div class="user-top">
+        <div class="avatar" aria-hidden="true">${esc(initials(p))}</div>
+        <div class="user-id"><div class="user-name">${esc(p.full_name || p.email)}</div><div class="user-email">${esc(p.email || '')}</div></div>
+      </div>
+      <div class="user-row">${roleCtl}
+        ${p.role === 'crew_lead' && isAdmin() ? `<button class="btn btn-sm" data-act="assign" data-id="${esc(p.id)}"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>` : ''}
+      </div>
+      ${p.role === 'crew_lead' ? `<div class="user-stores">${stores.length ? `<b>${stores.length} store${stores.length === 1 ? '' : 's'}:</b> ${esc(stores.join(', '))}` : 'No stores assigned yet, so they see nothing.'}</div>` : ''}
+    </article>`;
+  }).join('') || emptyHTML('No users yet');
+}
+
+async function changeRole(id, role, sel) {
+  const p = state.profiles.find((x) => x.id === id);
+  if (!p) return;
+  const prev = p.role;
+  sel.disabled = true;
+  try {
+    await db.setRole(id, role);
+    p.role = role;
+    showToast(`${p.full_name || p.email} is now ${ROLE_LABEL[role]}`);
+    await renderUsers();
+    if (role === 'crew_lead' && !state.assignments.some((a) => a.user_id === id)) openAssign(id);
+  } catch {
+    sel.value = prev;
+    showToast("Couldn't change the role. Try again.", { error: true });
+  }
+  sel.disabled = false;
+}
+
+function openAssign(id) {
+  const p = state.profiles.find((x) => x.id === id);
+  if (!p) return;
+  state.assignUser = id;
+  const mine = new Set(state.assignments.filter((a) => a.user_id === id).map((a) => a.store_id));
+  $('assignTitle').textContent = `Stores for ${p.full_name || p.email}`;
+  const stores = state.stores.filter((s) => isActiveStore(s) || mine.has(s.id))
+    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  let last = '';
+  $('assignList').innerHTML = stores.map((s) => {
+    const head = s.account !== last ? `<div class="assign-group">${esc(s.account)}</div>` : '';
+    last = s.account;
+    return `${head}<label class="assign-item"><input type="checkbox" value="${esc(s.id)}" ${mine.has(s.id) ? 'checked' : ''}><span>${esc(s.name)} <small>${esc(city(s))}</small></span></label>`;
+  }).join('');
+  openSheet('assignSheet');
+}
+
+async function saveAssignments() {
+  const ids = [...$('assignList').querySelectorAll('input:checked')].map((i) => i.value);
+  const btn = $('assignSave'); btn.disabled = true;
+  try {
+    await db.setAssignments(state.assignUser, ids);
+    closeSheet('assignSheet');
+    showToast(`${ids.length} store${ids.length === 1 ? '' : 's'} assigned`);
+    await renderUsers();
+  } catch {
+    showToast("Couldn't save the stores. Try again.", { error: true });
+  }
+  btn.disabled = false;
+}
+
+async function loadAll() {
+  if (!state.me) return;
+  try {
+    const [stores, issues] = await Promise.all([db.getStores(), db.getIssues()]);
     state.stores = stores;
     state.issues = issues;
     state.byId = new Map(stores.map((s) => [s.id, s]));
@@ -98,6 +366,7 @@ function bindEvents() {
     else if (act === 'status') setStatus(Number(id), t.dataset.to);
     else if (act === 'edit') editIssue(Number(id));
     else if (act === 'delete') deleteIssue(Number(id));
+    else if (act === 'assign') openAssign(id);
   });
 }
 
@@ -111,17 +380,18 @@ function chipGroup(id, onPick) {
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
-const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports' };
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers' };
 function switchScreen(name) {
   state.screen = name;
   Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
-  const navName = name === 'detail' ? 'stores' : name;
+  const navName = name === 'detail' || name === 'users' ? 'stores' : name;
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.screen === navName));
   if (name === 'stores') renderStores();
   else if (name === 'issues') renderIssues();
   else if (name === 'log') populateLogStores();
   else if (name === 'detail') renderDetail();
   else if (name === 'reports') renderReports();
+  else if (name === 'users') renderUsers();
   window.scrollTo({ top: 0 });
 }
 
@@ -181,7 +451,12 @@ function renderStores() {
     if (q && ![s.name, s.id, s.address, s.state].some((v) => String(v || '').toLowerCase().includes(q))) return false;
     return true;
   });
-  if (!stores.length) { list.innerHTML = emptyHTML('No stores match', 'Try another search or account.'); return; }
+  if (!stores.length) {
+    list.innerHTML = !state.stores.length && state.me?.role === 'crew_lead'
+      ? emptyHTML('No stores assigned yet', 'Ask an admin to assign your stores.')
+      : emptyHTML('No stores match', 'Try another search or account.');
+    return;
+  }
 
   const groups = new Map();
   stores.forEach((s) => { if (!groups.has(s.account)) groups.set(s.account, []); groups.get(s.account).push(s); });
@@ -253,7 +528,7 @@ function issueCardHTML(i, { showPoints = false, showStore = true } = {}) {
   if (open) actions.push(`<button class="btn btn-sm resolve" data-act="status" data-id="${i.id}" data-to="resolved"><i class="ti ti-check" aria-hidden="true"></i>Resolve</button>`);
   else actions.push(`<button class="btn btn-sm" data-act="status" data-id="${i.id}" data-to="open">Reopen</button>`);
   actions.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
-  actions.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
+  if (canDelete()) actions.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
   return `<article class="issue-card ${open ? '' : 'resolved'}">
     <div class="issue-top">
       ${showStore ? `<div class="issue-store">${esc(s?.name || i.store_id)} <small>${esc(city(s))}</small></div>` : `<div class="issue-store">${esc(fmtDate(i.date))}</div>`}
@@ -293,6 +568,7 @@ function renderDetail() {
   $('detailScore').setAttribute('aria-label', `Health score ${score} out of 100`);
 
   const btn = $('detailActiveBtn');
+  btn.hidden = !isAdmin();
   btn.textContent = isActiveStore(s) ? 'Mark inactive' : 'Mark active';
   btn.onclick = () => toggleStoreActive(s);
 

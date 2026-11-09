@@ -18,18 +18,92 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="/css/app.css">
 </head>
-<body>
+<body class="signed-out">
 <div id="app">
 
   <header class="header">
     <div class="brand">OpsBase</div>
-    <div class="header-stats" id="headerStats"></div>
+    <div class="header-right">
+      <div class="header-stats" id="headerStats"></div>
+      <button class="avatar" id="accountBtn" hidden aria-label="Your account"></button>
+    </div>
   </header>
 
   <main class="main">
 
+    <!-- SIGN IN -->
+    <section class="screen" id="scAuth" aria-labelledby="authTitle">
+      <div class="auth">
+        <div class="auth-brand">OpsBase</div>
+        <h1 class="page-title" id="authTitle">Sign in</h1>
+        <p class="page-sub" id="authSub">Store health and issues for CSG field teams.</p>
+        <div class="chips auth-tabs" id="authTabs" role="tablist" aria-label="Sign in or create account">
+          <button class="chip active" data-val="signin">Sign in</button>
+          <button class="chip" data-val="signup">Create account</button>
+        </div>
+        <form class="form" id="authForm" novalidate>
+          <div class="field" id="authNameField" hidden>
+            <label for="authName">Your name</label>
+            <input type="text" id="authName" autocomplete="name" placeholder="Tyler VanWinkle">
+          </div>
+          <div class="field">
+            <label for="authEmail">Email</label>
+            <input type="email" id="authEmail" autocomplete="email" inputmode="email" placeholder="name@csginc.com" required>
+          </div>
+          <div class="field">
+            <label for="authPassword">Password</label>
+            <input type="password" id="authPassword" autocomplete="current-password" minlength="8" required>
+          </div>
+          <p class="field-error" id="authError" hidden></p>
+          <p class="auth-note" id="authNote" hidden></p>
+          <div class="form-actions"><button type="submit" class="btn btn-primary" id="authSubmit">Sign in</button></div>
+        </form>
+        <div class="auth-links" id="authLinks">
+          <button class="link" id="authLinkBtn">Email me a sign-in link instead</button>
+          <button class="link" id="authResetBtn">Forgot password?</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- WAITING FOR APPROVAL -->
+    <section class="screen" id="scPending" aria-labelledby="pendingTitle">
+      <div class="auth">
+        <div class="auth-brand">OpsBase</div>
+        <h1 class="page-title" id="pendingTitle">Waiting for access</h1>
+        <p class="page-sub" id="pendingText">Your account is set up. An admin needs to give you a role before you can see stores. Ask Murod to approve you, then reopen OpsBase.</p>
+        <div class="form-actions">
+          <button class="btn" id="pendingRefresh">Check again</button>
+          <button class="btn btn-ghost" id="pendingSignOut">Sign out</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- USERS (admin) -->
+    <section class="screen" id="scUsers" aria-labelledby="usersTitle">
+      <div class="detail-head">
+        <button class="back" id="usersBackBtn"><i class="ti ti-chevron-left" aria-hidden="true"></i>Back</button>
+      </div>
+      <div class="page-head" style="padding-top:4px">
+        <div>
+          <h1 class="page-title" id="usersTitle">Users</h1>
+          <p class="page-sub" id="usersSub">Loading…</p>
+        </div>
+      </div>
+      <details class="roles-help">
+        <summary>What each role can do</summary>
+        <ul>
+          <li><b>Admin</b> — everything, including users and adding or deactivating stores.</li>
+          <li><b>Supervisor</b> — all stores; log, edit, resolve and delete issues.</li>
+          <li><b>Crew lead</b> — only their assigned stores; log, edit and resolve issues there.</li>
+          <li><b>Pending</b> — signed up, waiting for you. <b>Disabled</b> — no access.</li>
+        </ul>
+        <p>New people sign up at this app's address with "Create account", then appear here as Pending.</p>
+      </details>
+      <div id="userList" class="user-list"></div>
+    </section>
+
     <!-- STORES -->
-    <section class="screen active" id="scStores" aria-labelledby="storesTitle">
+    <section class="screen" id="scStores" aria-labelledby="storesTitle">
       <div class="page-head">
         <div>
           <h1 class="page-title" id="storesTitle">Stores</h1>
@@ -199,7 +273,7 @@
 
   </main>
 
-  <nav class="bottom-nav" aria-label="Main">
+  <nav class="bottom-nav" id="bottomNav" aria-label="Main">
     <button class="nav-item active" data-screen="stores"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>
     <button class="nav-item" data-screen="issues"><i class="ti ti-alert-circle" aria-hidden="true"></i>Issues<span class="nav-badge" id="navBadge" hidden></span></button>
     <button class="nav-item" data-screen="log"><i class="ti ti-circle-plus" aria-hidden="true"></i>Log</button>
@@ -243,6 +317,57 @@
       <button class="btn btn-ghost" id="cancelStore">Cancel</button>
       <button class="btn btn-primary" id="saveStoreBtn">Add store</button>
     </div>
+  </div>
+</div>
+
+<!-- ACCOUNT -->
+<div class="sheet-overlay" id="accountSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="accountTitle">Your account</h2>
+    <p class="page-sub" id="accountWho"></p>
+    <div class="field">
+      <label for="accountName">Name</label>
+      <input type="text" id="accountName" autocomplete="name">
+    </div>
+    <div class="field">
+      <label for="accountPassword">New password</label>
+      <input type="password" id="accountPassword" autocomplete="new-password" minlength="8" placeholder="Leave blank to keep current">
+    </div>
+    <p class="field-error" id="accountError" hidden></p>
+    <button class="btn" id="manageUsersBtn" hidden><i class="ti ti-users" aria-hidden="true"></i>Manage users</button>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="signOutBtn">Sign out</button>
+      <button class="btn btn-primary" id="saveAccountBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ASSIGN STORES -->
+<div class="sheet-overlay" id="assignSheet">
+  <div class="sheet sheet-tall" role="dialog" aria-modal="true" aria-labelledby="assignTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="assignTitle">Stores</h2>
+    <p class="page-sub" id="assignSub">Pick the stores this crew lead can see.</p>
+    <div class="assign-list" id="assignList"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="assignCancel">Cancel</button>
+      <button class="btn btn-primary" id="assignSave">Save stores</button>
+    </div>
+  </div>
+</div>
+
+<!-- SET NEW PASSWORD (after reset link) -->
+<div class="sheet-overlay" id="passwordSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="pwTitle">Set a new password</h2>
+    <div class="field">
+      <label for="newPassword">New password</label>
+      <input type="password" id="newPassword" autocomplete="new-password" minlength="8">
+    </div>
+    <p class="field-error" id="pwError" hidden></p>
+    <div class="sheet-actions"><button class="btn btn-primary" id="pwSave">Save password</button></div>
   </div>
 </div>
 

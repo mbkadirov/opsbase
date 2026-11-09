@@ -271,3 +271,53 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .loading { text-align: center; padding: 40px 16px; color: var(--muted); font-size: 14px; }
 .spinner { width: 24px; height: 24px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; margin: 0 auto 10px; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Accounts & roles ────────────────────── */
+.header-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.avatar {
+  width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--accent-soft);
+  color: var(--accent); font-weight: 600; font-size: 13px; display: grid; place-items: center; flex-shrink: 0;
+}
+body.signed-out .header-stats, body.signed-out .avatar, body.signed-out .bottom-nav { display: none !important; }
+body.signed-out .main { padding-bottom: 32px; }
+
+.auth { max-width: 400px; margin: 0 auto; padding: 36px 0 24px; display: grid; gap: 14px; }
+.auth-brand { display: none; font-weight: 600; font-size: 15px; color: var(--muted); }
+.auth-brand::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--accent); margin-right: 8px; vertical-align: 1px; }
+.auth-tabs { padding-bottom: 0; }
+.auth-note { font-size: 14px; color: var(--text); background: var(--accent-soft); border-radius: var(--radius-sm); padding: 10px 12px; }
+.auth-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.link { background: none; border: 0; color: var(--accent); font-size: 14px; font-weight: 500; min-height: 40px; padding: 0; }
+input[type=email], input[type=password] {
+  width: 100%; min-height: 46px; padding: 0 12px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border); font-size: 16px; outline: none;
+}
+input[type=email]:focus, input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.roles-help { font-size: 14px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 14px; }
+.roles-help summary { cursor: pointer; color: var(--text); font-weight: 500; }
+.roles-help ul { margin: 8px 0 6px 18px; display: grid; gap: 4px; }
+.roles-help b { color: var(--text); font-weight: 600; }
+
+.user-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.user-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; }
+.user-card.pending { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.user-top { display: flex; align-items: center; gap: 12px; }
+.user-top .avatar { width: 40px; height: 40px; }
+.user-id { flex: 1; min-width: 0; }
+.user-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-email { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.user-row select { flex: 1 1 160px; width: auto; }
+.user-stores { font-size: 13px; color: var(--muted); }
+.user-stores b { color: var(--text); font-weight: 500; }
+.tag.role-admin { background: var(--accent-soft); color: var(--accent); }
+.tag.role-pending { background: var(--warn-soft); color: var(--warn); }
+.tag.role-disabled { background: var(--surface-2); color: var(--muted); }
+
+.sheet-tall { max-height: 88dvh; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+.assign-list { overflow-y: auto; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.assign-group { padding: 8px 12px 2px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); background: var(--surface-2); }
+.assign-item { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 12px; border-top: 1px solid var(--border); font-size: 15px; }
+.assign-item input { width: 20px; height: 20px; accent-color: var(--accent); }
+.assign-item small { color: var(--muted); }
