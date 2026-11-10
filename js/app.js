@@ -356,6 +356,12 @@ function bindEvents() {
   $('saveStoreBtn').addEventListener('click', handleAddStore);
   document.querySelectorAll('.sheet-overlay').forEach((el) => el.addEventListener('click', (e) => { if (e.target === el) closeSheet(el.id); }));
 
+  $('brandBtn').addEventListener('click', () => {
+    if (!state.me || document.body.classList.contains('signed-out')) return;
+    document.querySelectorAll('.sheet-overlay.open').forEach((el) => closeSheet(el.id));
+    state.selectedId = null;
+    switchScreen('stores');
+  });
   $('isClose').addEventListener('click', () => closeSheet('issueSheet'));
   $('isCommentForm').addEventListener('submit', postComment);
   $('noteCancel').addEventListener('click', () => closeSheet('noteSheet'));
