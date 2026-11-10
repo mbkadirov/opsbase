@@ -64,6 +64,9 @@ export const db = {
     if (!rows.length) throw new Error('not allowed');
   },
   async completeTask(id, note = '') { return check(await supabase.rpc('complete_task', { p_task: id, p_note: note })); },
+  async reviewTask(logId, action, note = '', category = 'Cleaning') {
+    return check(await supabase.rpc('review_task', { p_log: logId, p_action: action, p_note: note, p_category: category }));
+  },
   async reopenTask(id) { return check(await supabase.rpc('reopen_task', { p_task: id })); },
 
   async myProfile(uid) { return check(await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()); },

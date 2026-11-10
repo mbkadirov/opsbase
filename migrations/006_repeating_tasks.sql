@@ -73,7 +73,7 @@ language plpgsql security definer set search_path = public as $$
 declare
   t tasks%rowtype;
   nxt date;
-  note text := nullif(trim(coalesce(p_note, '')), '');
+  v_note text := nullif(trim(coalesce(p_note, '')), '');
 begin
   select * into t from tasks where id = p_task;
   if t.id is null then raise exception 'Task not found'; end if;
@@ -82,19 +82,19 @@ begin
   end if;
   if t.status = 'done' then return; end if;
 
-  insert into task_log (task_id, due_date, done_by, done_by_name, note) values (t.id, t.due_date, auth.uid(), my_name(), note);
+  insert into task_log (task_id, due_date, done_by, done_by_name, note) values (t.id, t.due_date, auth.uid(), my_name(), v_note);
   nxt := task_next_due(t);
   if nxt is null then
-    update tasks set status = 'done', done_at = now(), done_by_name = my_name(), done_note = note,
+    update tasks set status = 'done', done_at = now(), done_by_name = my_name(), done_note = v_note,
                      last_done_at = now(), last_done_by_name = my_name() where id = p_task;
   else
-    update tasks set due_date = nxt, last_done_at = now(), last_done_by_name = my_name(), done_note = note where id = p_task;
+    update tasks set due_date = nxt, last_done_at = now(), last_done_by_name = my_name(), done_note = v_note where id = p_task;
   end if;
 
   if t.issue_id is not null then
     insert into issue_comments (issue_id, user_id, author_name, kind, body)
       values (t.issue_id, auth.uid(), my_name(), 'comment',
-              'Follow-up done: ' || t.title || coalesce(' — ' || note, ''));
+              'Follow-up done: ' || t.title || coalesce(' — ' || v_note, ''));
   end if;
 end
 $$;

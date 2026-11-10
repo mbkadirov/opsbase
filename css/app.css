@@ -392,3 +392,13 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .task-last { font-size: 13px; color: var(--muted); margin-top: 6px; }
 .log-row { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; }
 .sheet { max-height: 92dvh; overflow-y: auto; }
+.task-card.review { border-color: var(--warn); }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.task-sentback { font-size: 13px; color: var(--bad); margin-top: 6px; font-weight: 500; }
+.tag.rv-ok { background: var(--ok-soft); color: var(--ok); }
+.tag.rv-warn { background: var(--warn-soft); color: var(--warn); }
+.tag.rv-bad { background: var(--bad-soft, var(--surface-2)); color: var(--bad); }
+.task-card.review > *, .task-sentback, .task-last { grid-column: 1 / -1; }
+.review-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.review-actions .btn { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
+.review-actions .btn.approve { background: var(--ok); border-color: var(--ok); color: #fff; }

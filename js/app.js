@@ -420,6 +420,10 @@ function bindEvents() {
     else if (act === 'taskreopen') reopenTask(Number(id));
     else if (act === 'taskdelete') deleteTask(Number(id));
     else if (act === 'taskedit') openTaskSheet(null, Number(id));
+    else if (act === 'logapprove') approveTaskLog(Number(id));
+    else if (act === 'logsendback') openNote('tasksendback', Number(id));
+    else if (act === 'logissue') openNote('taskissue', Number(id), logIssueText(Number(id)));
+    else if (act === 'logfollow') followUpFromLog(Number(id));
   });
 }
 
@@ -466,7 +470,7 @@ function renderHeader() {
   const badge = $('navBadge');
   badge.hidden = !open;
   badge.textContent = open > 99 ? '99+' : String(open);
-  const mineDue = myOpenTasks().filter((t) => !t.due_date || t.due_date <= today()).length + (isAdmin() ? approvalQueue().length : 0);
+  const mineDue = myOpenTasks().filter((t) => !t.due_date || t.due_date <= today()).length + (isAdmin() ? approvalQueue().length + taskReviewQueue().length : 0);
   const tb = $('taskBadge');
   tb.hidden = !mineDue;
   tb.textContent = String(mineDue);
@@ -705,6 +709,16 @@ const NOTE_MODES = {
     placeholder: 'Tabitha confirmed the freezer floor looks good.',
     sub: () => 'Your note is added to the issue\'s activity.'
   },
+  tasksendback: {
+    title: 'Send task back', label: 'What still needs to be done?', submit: 'Send back',
+    placeholder: 'Drains still have buildup. Redo tonight and send a photo.',
+    sub: () => 'It goes back on their list for the same day, with your note.'
+  },
+  taskissue: {
+    title: 'Make it an issue', label: 'Describe the problem', submit: 'Log issue',
+    placeholder: 'Bakery floor drains still clogged after the nightly scrub.',
+    sub: () => 'This logs a new open issue for the store. The task is closed.'
+  },
   reopen: {
     title: 'Reopen issue', label: 'Why reopen it? (optional)', submit: 'Reopen',
     placeholder: 'Same problem reported again on Nov 12.',
@@ -713,14 +727,15 @@ const NOTE_MODES = {
 };
 let noteState = null;
 
-function openNote(mode, id) {
+function openNote(mode, id, prefill = '') {
   const m = NOTE_MODES[mode];
   noteState = { mode, id };
+  $('noteCatField').hidden = mode !== 'taskissue';
   $('noteTitle').textContent = m.title;
   $('noteSub').textContent = m.sub();
   $('noteLabel').textContent = m.label;
   $('noteText').placeholder = m.placeholder;
-  $('noteText').value = '';
+  $('noteText').value = prefill;
   $('noteSubmit').textContent = m.submit;
   $('noteError').hidden = true;
   openSheet('noteSheet');
@@ -733,7 +748,8 @@ async function submitNote() {
   const text = $('noteText').value.trim();
   const err = $('noteError');
   if (mode === 'resolve' && text.length < 5) { err.textContent = 'Describe what was done to fix it.'; err.hidden = false; return; }
-  if (mode === 'sendback' && text.length < 3) { err.textContent = 'Say why it is being sent back.'; err.hidden = false; return; }
+  if ((mode === 'sendback' || mode === 'tasksendback') && text.length < 3) { err.textContent = 'Say why it is being sent back.'; err.hidden = false; return; }
+  if (mode === 'taskissue' && text.length < 5) { err.textContent = 'Describe the problem.'; err.hidden = false; return; }
   const btn = $('noteSubmit'); btn.disabled = true;
   try {
     if (mode === 'resolve') {
@@ -743,8 +759,17 @@ async function submitNote() {
       await db.completeTask(id, text);
       closeSheet('noteSheet'); noteState = null;
       const t = state.tasks.find((x) => x.id === id);
-      showToast(t && t.repeat && t.repeat !== 'none' ? 'Done. It moves to the next date.' : 'Task done');
+      const rep = t && t.repeat && t.repeat !== 'none';
+      showToast(isAdmin() ? (rep ? 'Done. It moves to the next date.' : 'Task done') : `Sent for approval${rep ? '. It moves to the next date.' : ''}`);
       await refreshAfterChange(t?.issue_id ?? -1);
+      btn.disabled = false;
+      return;
+    } else if (mode === 'tasksendback' || mode === 'taskissue') {
+      const newIssue = await db.reviewTask(id, mode === 'taskissue' ? 'issue' : 'sendback', text, $('noteCat').value);
+      closeSheet('noteSheet'); noteState = null;
+      await refreshAfterChange(-1);
+      if (mode === 'taskissue') showToast('Issue logged', { action: 'Open', onAction: () => openIssue(Number(newIssue)), duration: 6000 });
+      else showToast('Sent back');
       btn.disabled = false;
       return;
     } else if (mode === 'sendback') {
@@ -800,6 +825,9 @@ function friendlyDbError(e) {
 // Fixes waiting for an admin to approve; shown at the top of an admin's Tasks tab.
 const approvalQueue = () => state.issues.filter((i) => i.status === 'pending review' && isActiveStore(state.byId.get(i.store_id)))
   .sort((a, b) => (a.resolved_at || a.date || '').localeCompare(b.resolved_at || b.date || ''));
+// Task completions by the team, waiting for an admin.
+const taskReviewQueue = () => state.taskLog.filter((l) => l.review === 'pending' && state.tasks.some((t) => t.id === l.task_id))
+  .sort((a, b) => a.done_at.localeCompare(b.done_at));
 const myOpenTasks = () => state.tasks.filter((t) => t.status === 'open' && t.assignee_id === state.me?.id);
 
 function dueInfo(t) {
@@ -820,18 +848,20 @@ function taskCardHTML(t) {
   const actions = t.status === 'open'
     ? (canFinish ? `<button class="btn btn-sm resolve" data-act="taskdone" data-id="${t.id}"><i class="ti ti-check" aria-hidden="true"></i>Done</button>` : '')
     : `<button class="btn btn-sm" data-act="taskreopen" data-id="${t.id}">Undo</button>`;
+  const sentBack = t.status === 'open' && /^Sent back: /.test(t.done_note || '');
   return `<article class="task-card ${due.cls === 'overdue' ? 'overdue' : ''} ${t.status === 'done' ? 'done' : ''}">
     <div class="task-title">${esc(t.title)}</div>
     <div class="task-actions">${actions}${isAdmin() ? `<button class="btn btn-sm icon" data-act="taskedit" data-id="${t.id}" aria-label="Edit task"><i class="ti ti-pencil" aria-hidden="true"></i></button><button class="btn btn-sm icon" data-act="taskdelete" data-id="${t.id}" aria-label="Delete task"><i class="ti ti-trash" aria-hidden="true"></i></button>` : ''}</div>
     <div class="task-meta">
-      <span class="task-due ${due.cls}">${esc(t.status === 'done' ? `Done ${t.done_at ? fmtDateTime(t.done_at) : ''}` : due.text)}</span>
+      <span class="task-due ${due.cls}">${esc(t.status === 'done' ? `Done ${t.done_at ? fmtDateTime(t.done_at) : ''}` : t.status === 'pending review' ? 'Waiting for approval' : due.text)}</span>
       ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
       ${state.taskFilter !== 'mine' || t.assignee_id !== state.me?.id ? `<span>· ${esc(t.assignee_name || 'Unassigned')}</span>` : ''}
       ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
       ${t.source === 'email' ? '<span class="tag">From email</span>' : ''}
       ${t.status === 'done' && t.done_note ? `<span>· ${esc(t.done_note)}</span>` : ''}
     </div>
-    ${t.status === 'open' && t.last_done_at ? `<div class="task-last">Last done ${esc(fmtDateTime(t.last_done_at))}${t.last_done_by_name ? ' by ' + esc(t.last_done_by_name) : ''}${t.done_note ? ' · ' + esc(t.done_note) : ''}</div>` : ''}
+    ${sentBack ? `<div class="task-sentback">${esc(t.done_note)}</div>` : ''}
+    ${t.status === 'open' && t.last_done_at && !sentBack ? `<div class="task-last">Last done ${esc(fmtDateTime(t.last_done_at))}${t.last_done_by_name ? ' by ' + esc(t.last_done_by_name) : ''}${t.done_note ? ' · ' + esc(t.done_note) : ''}</div>` : ''}
     ${issue ? `<button class="task-link" data-act="issue" data-id="${issue.id}">Open issue: ${esc(issue.description.slice(0, 70))}${issue.description.length > 70 ? '…' : ''}</button>` : ''}
   </article>`;
 }
@@ -846,16 +876,18 @@ function renderTasks() {
   if (state.taskFilter === 'done') rows = state.taskLog.length ? state.taskLog
     : state.tasks.filter((t) => t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
       .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
-  else rows = state.tasks.filter((t) => t.status === 'open' && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
+  else rows = state.tasks.filter((t) => (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
     .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
   const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
   const approvals = state.taskFilter !== 'done' && isAdmin() ? approvalQueue() : [];
+  const reviews = state.taskFilter !== 'done' && isAdmin() ? taskReviewQueue() : [];
+  const toApprove = approvals.length + reviews.length;
   $('tasksSub').textContent = state.taskFilter === 'done' ? `${rows.length} finished`
-    : `${approvals.length ? `${approvals.length} to approve · ` : ''}${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
-  const approvalHTML = approvals.length
-    ? `<div class="task-group warn">Needs your approval</div>${approvals.map((i) => issueCardHTML(i)).join('')}` : '';
+    : `${toApprove ? `${toApprove} to approve · ` : ''}${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
+  const approvalHTML = toApprove
+    ? `<div class="task-group warn">Needs your approval</div>${reviews.map(reviewCardHTML).join('')}${approvals.map((i) => issueCardHTML(i)).join('')}` : '';
   if (!rows.length) {
-    list.innerHTML = approvalHTML + (approvals.length && state.taskFilter !== 'done'
+    list.innerHTML = approvalHTML + (toApprove && state.taskFilter !== 'done'
       ? '<div class="task-group">Follow-ups</div><p class="task-empty">No open follow-ups.</p>'
       : emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : ''));
     return;
@@ -865,8 +897,57 @@ function renderTasks() {
   const rest = rows.filter((t) => dueInfo(t).cls !== 'overdue');
   list.innerHTML = approvalHTML
     + (late.length ? `<div class="task-group bad">Overdue</div>${late.map(taskCardHTML).join('')}` : '')
-    + (rest.length ? `${late.length || approvals.length ? `<div class="task-group">${late.length ? 'Coming up' : 'Follow-ups'}</div>` : ''}${rest.map(taskCardHTML).join('')}` : '');
+    + (rest.length ? `${late.length || toApprove ? `<div class="task-group">${late.length ? 'Coming up' : 'Follow-ups'}</div>` : ''}${rest.map(taskCardHTML).join('')}` : '');
 }
+
+// A team member's "done" waiting for the admin: approve, send back, make an issue, or add a follow-up.
+function reviewCardHTML(l) {
+  const t = state.tasks.find((x) => x.id === l.task_id);
+  const s = state.byId.get(t.store_id);
+  return `<article class="task-card review">
+    <div class="task-title">${esc(t.title)}</div>
+    <div class="task-meta">
+      <span class="task-due today">Done ${esc(fmtDateTime(l.done_at))}</span>
+      ${l.done_by_name ? `<span>· ${esc(l.done_by_name)}</span>` : ''}
+      ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
+      ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
+    </div>
+    ${l.note ? `<div class="issue-fix"><b>Their note</b><br>${esc(l.note)}</div>` : ''}
+    ${t.issue_id ? `<button class="task-link" data-act="issue" data-id="${t.issue_id}">Open linked issue</button>` : ''}
+    <div class="review-actions">
+      <button class="btn btn-sm approve" data-act="logapprove" data-id="${l.id}"><i class="ti ti-circle-check" aria-hidden="true"></i>Approve</button>
+      <button class="btn btn-sm" data-act="logsendback" data-id="${l.id}">Send back</button>
+      <button class="btn btn-sm" data-act="logissue" data-id="${l.id}"><i class="ti ti-alert-circle" aria-hidden="true"></i>Make issue</button>
+      <button class="btn btn-sm" data-act="logfollow" data-id="${l.id}"><i class="ti ti-calendar-plus" aria-hidden="true"></i>Follow-up</button>
+    </div>
+  </article>`;
+}
+
+function logIssueText(logId) {
+  const l = state.taskLog.find((x) => x.id === logId);
+  const t = l && state.tasks.find((x) => x.id === l.task_id);
+  return t ? `${t.title}${l.note ? ` — ${l.note}` : ''}` : '';
+}
+
+function followUpFromLog(logId) {
+  const l = state.taskLog.find((x) => x.id === logId);
+  const t = l && state.tasks.find((x) => x.id === l.task_id);
+  if (t) openTaskSheet(t.issue_id || null, null, { storeId: t.store_id });
+}
+
+async function approveTaskLog(logId) {
+  const l = state.taskLog.find((x) => x.id === logId);
+  try {
+    await db.reviewTask(logId, 'approve');
+    await refreshAfterChange(-1);
+    showToast('Approved', { action: 'Add follow-up', onAction: () => followUpFromLog(logId), duration: 8000 });
+  } catch (e) {
+    showToast(/review_task|function/i.test(e.message) ? 'The database needs the task-approval update first (migration 007).' : friendlyDbError(e), { error: true });
+  }
+  return l;
+}
+
+const REVIEW_TAG = { pending: ['Waiting for approval', 'warn'], approved: ['Approved', 'ok'], sent_back: ['Sent back', 'bad'], issue: ['Became an issue', 'bad'] };
 
 // Every time a task was finished, newest first. Undo only on a one-time task's last finish.
 function doneLogHTML() {
@@ -876,17 +957,19 @@ function doneLogHTML() {
     const t = state.tasks.find((x) => x.id === l.task_id);
     if (!t) return '';
     const s = state.byId.get(t.store_id);
-    const undo = t.status === 'done' && latest.get(t.id) === l.id
+    const undo = (t.status === 'done' || t.status === 'pending review') && latest.get(t.id) === l.id && (isAdmin() || l.review === 'pending')
       ? `<button class="btn btn-sm" data-act="taskreopen" data-id="${t.id}">Undo</button>` : '';
     return `<article class="task-card done">
       <div class="log-row"><div class="task-title">${esc(t.title)}</div><div class="task-actions">${undo}</div></div>
       <div class="task-meta">
         <span class="task-due">Done ${esc(fmtDateTime(l.done_at))}</span>
         ${l.done_by_name ? `<span>· ${esc(l.done_by_name)}</span>` : ''}
+        ${l.review && REVIEW_TAG[l.review] ? `<span class="tag rv-${REVIEW_TAG[l.review][1]}">${REVIEW_TAG[l.review][0]}</span>` : ''}
         ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
         ${l.due_date && t.repeat !== 'none' ? `<span>· for ${esc(fmtDate(l.due_date))}</span>` : ''}
         ${l.note ? `<span>· ${esc(l.note)}</span>` : ''}
       </div>
+      ${l.review_note && l.review !== 'approved' ? `<div class="task-last">${esc(l.reviewed_by_name || 'Admin')}: ${esc(l.review_note)}</div>` : ''}
     </article>`;
   }).join('');
 }
@@ -933,7 +1016,7 @@ function syncRepeatFields() {
   $('taskRepeatHint').textContent = r === 'none' ? '' : repeatText(preview) + (preview.repeat_until ? '' : ' (no end date)');
 }
 
-function openTaskSheet(issueId, editId = null) {
+function openTaskSheet(issueId, editId = null, opts = {}) {
   const t = editId ? state.tasks.find((x) => x.id === editId) : null;
   if (editId && !t) return;
   const i = state.issues.find((x) => x.id === (t ? t.issue_id : issueId));
@@ -947,7 +1030,7 @@ function openTaskSheet(issueId, editId = null) {
   if (!i) {
     const stores = state.stores.filter(isActiveStore);
     $('taskStore').innerHTML = '<option value="">No specific store</option>' + stores.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · ${esc(city(x))}</option>`).join('');
-    $('taskStore').value = t?.store_id || (state.screen === 'detail' ? state.selectedId || '' : '');
+    $('taskStore').value = t?.store_id || opts.storeId || (state.screen === 'detail' ? state.selectedId || '' : '');
   }
   $('taskTitle').value = t?.title || '';
   const staff = state.profiles.filter((p) => STAFF.includes(p.role))
