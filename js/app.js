@@ -72,7 +72,9 @@ async function start(session) {
     renderAvatar();
     $('addStoreBtn').hidden = !isAdmin();
     await loadAll();
-    switchScreen('stores');
+    const want = new URLSearchParams(location.search).get('screen');
+    if (want === 'log') resetLogForm();
+    switchScreen(['issues', 'log', 'reports'].includes(want) ? want : 'stores');
   } finally {
     state.starting = false;
   }
