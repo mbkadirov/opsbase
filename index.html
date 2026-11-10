@@ -241,6 +241,22 @@
       <div class="issue-list" id="detailIssueList"></div>
     </section>
 
+    <!-- TASKS -->
+    <section class="screen" id="scTasks" aria-labelledby="tasksTitle">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title" id="tasksTitle">Tasks</h1>
+          <p class="page-sub" id="tasksSub">Follow-ups with due dates</p>
+        </div>
+      </div>
+      <div class="chips" id="taskChips" role="tablist" aria-label="Which tasks">
+        <button class="chip active" data-val="mine">Mine</button>
+        <button class="chip" data-val="all" id="taskAllChip" hidden>Everyone</button>
+        <button class="chip" data-val="done">Done</button>
+      </div>
+      <div class="issue-list" id="taskList"></div>
+    </section>
+
     <!-- REPORTS -->
     <section class="screen" id="scReports" aria-labelledby="reportsTitle">
       <div class="page-head">
@@ -278,6 +294,7 @@
     <button class="nav-item active" data-screen="stores"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>
     <button class="nav-item" data-screen="issues"><i class="ti ti-alert-circle" aria-hidden="true"></i>Issues<span class="nav-badge" id="navBadge" hidden></span></button>
     <button class="nav-item" data-screen="log"><i class="ti ti-circle-plus" aria-hidden="true"></i>Log</button>
+    <button class="nav-item" data-screen="tasks"><i class="ti ti-checklist" aria-hidden="true"></i>Tasks<span class="nav-badge" id="taskBadge" hidden></span></button>
     <button class="nav-item" data-screen="reports"><i class="ti ti-chart-bar" aria-hidden="true"></i>Reports</button>
   </nav>
 </div>
@@ -338,6 +355,34 @@
       <textarea id="isComment" rows="2" placeholder="Add a comment or update"></textarea>
       <button type="submit" class="btn btn-primary btn-sm" id="isCommentBtn">Post</button>
     </form>
+  </div>
+</div>
+
+<!-- NEW FOLLOW-UP -->
+<div class="sheet-overlay" id="taskSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="taskSheetTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="taskSheetTitle">Add follow-up</h2>
+    <p class="page-sub" id="taskSheetSub"></p>
+    <div class="field">
+      <label for="taskTitle">What needs to happen</label>
+      <textarea id="taskTitle" rows="3" placeholder="Check with Tabitha on Friday that the Bakery freezer floor passed."></textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="taskAssignee">Who</label>
+        <select id="taskAssignee"></select>
+      </div>
+      <div class="field">
+        <label for="taskDue">Due</label>
+        <input type="date" id="taskDue">
+      </div>
+    </div>
+    <p class="field-error" id="taskError" hidden></p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="taskCancel">Cancel</button>
+      <button class="btn btn-primary" id="taskSave">Add follow-up</button>
+    </div>
   </div>
 </div>
 

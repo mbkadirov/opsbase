@@ -50,6 +50,17 @@ export const db = {
     return check(await supabase.from('issue_comments').select('*').eq('issue_id', id).order('created_at'));
   },
 
+  async getTasks() {
+    return check(await supabase.from('tasks').select('*').order('status').order('due_date', { ascending: true, nullsFirst: false }).order('created_at'));
+  },
+  async addTask(task) { return check(await supabase.from('tasks').insert(task).select()); },
+  async deleteTask(id) {
+    const rows = check(await supabase.from('tasks').delete().eq('id', id).select('id'));
+    if (!rows.length) throw new Error('not allowed');
+  },
+  async completeTask(id, note = '') { return check(await supabase.rpc('complete_task', { p_task: id, p_note: note })); },
+  async reopenTask(id) { return check(await supabase.rpc('reopen_task', { p_task: id })); },
+
   async myProfile(uid) { return check(await supabase.from('profiles').select('*').eq('id', uid).maybeSingle()); },
   async setMyName(name) { return check(await supabase.rpc('set_my_name', { new_name: name })); },
   async getProfiles() { return check(await supabase.from('profiles').select('*').order('created_at')); },

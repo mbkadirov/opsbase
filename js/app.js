@@ -23,7 +23,9 @@ const state = {
   profiles: [],
   assignments: [],
   authMode: 'signin',
-  assignUser: null
+  assignUser: null,
+  tasks: [],
+  taskFilter: 'mine'
 };
 
 const ROLE_LABEL = { admin: 'Admin', supervisor: 'Supervisor', crew_lead: 'Crew lead', pending: 'Pending', disabled: 'Disabled' };
@@ -311,9 +313,15 @@ async function saveAssignments() {
 async function loadAll() {
   if (!state.me) return;
   try {
-    const [stores, issues] = await Promise.all([db.getStores(), db.getIssues()]);
+    const [stores, issues, tasks, profiles] = await Promise.all([
+      db.getStores(), db.getIssues(),
+      db.getTasks().catch(() => []),
+      canSeeUsers() ? db.getProfiles().catch(() => []) : Promise.resolve([])
+    ]);
     state.stores = stores;
     state.issues = issues;
+    state.tasks = tasks;
+    if (profiles.length) state.profiles = profiles;
     state.byId = new Map(stores.map((s) => [s.id, s]));
     state.loaded = true;
   } catch (e) {
@@ -345,6 +353,9 @@ function bindEvents() {
   $('issueCatFilter').addEventListener('change', (e) => { state.issueCategory = e.target.value; renderIssues(); });
   chipGroup('issueChips', (v) => { state.issueStatus = v; renderIssues(); });
   chipGroup('reportChips', (v) => { state.reportPeriod = v; renderReports(); });
+  chipGroup('taskChips', (v) => { state.taskFilter = v; renderTasks(); });
+  $('taskCancel').addEventListener('click', () => closeSheet('taskSheet'));
+  $('taskSave').addEventListener('click', saveTask);
 
   $('logForm').addEventListener('submit', handleSaveIssue);
   $('logDesc').addEventListener('input', () => { $('logError').hidden = true; });
@@ -385,6 +396,10 @@ function bindEvents() {
     else if (act === 'edit') editIssue(Number(id));
     else if (act === 'delete') deleteIssue(Number(id));
     else if (act === 'assign') openAssign(id);
+    else if (act === 'addtask') openTaskSheet(Number(id));
+    else if (act === 'taskdone') openNote('task', Number(id));
+    else if (act === 'taskreopen') reopenTask(Number(id));
+    else if (act === 'taskdelete') deleteTask(Number(id));
   });
 }
 
@@ -398,7 +413,7 @@ function chipGroup(id, onPick) {
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
-const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers' };
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks' };
 function switchScreen(name) {
   state.screen = name;
   Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
@@ -410,6 +425,7 @@ function switchScreen(name) {
   else if (name === 'detail') renderDetail();
   else if (name === 'reports') renderReports();
   else if (name === 'users') renderUsers();
+  else if (name === 'tasks') renderTasks();
   window.scrollTo({ top: 0 });
 }
 
@@ -419,6 +435,7 @@ function rerender() {
   else if (state.screen === 'issues') renderIssues();
   else if (state.screen === 'detail') renderDetail();
   else if (state.screen === 'reports') renderReports();
+  else if (state.screen === 'tasks') renderTasks();
 }
 
 // ── HEADER & ACCOUNT CONTROLS ─────────────────────────────────────────
@@ -429,6 +446,10 @@ function renderHeader() {
   const badge = $('navBadge');
   badge.hidden = !open;
   badge.textContent = open > 99 ? '99+' : String(open);
+  const mineDue = myOpenTasks().filter((t) => !t.due_date || t.due_date <= today()).length;
+  const tb = $('taskBadge');
+  tb.hidden = !mineDue;
+  tb.textContent = String(mineDue);
 }
 
 function shownStores() {
@@ -634,6 +655,7 @@ function renderIssueSheet(comments) {
     <dl class="is-meta">${meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     ${i.resolution && i.status !== 'open' && i.status !== 'in progress' ? `<div class="issue-fix"><b>What was done</b><br>${esc(i.resolution)}</div>` : ''}
     <div class="is-actions issue-actions">${issueActions(i)}</div>
+    ${followUpsHTML(i)}
     <h3 class="section-title">Activity</h3>
     ${timeline}`;
 }
@@ -656,6 +678,11 @@ const NOTE_MODES = {
     title: 'Send back', label: 'Why isn\'t it fixed yet?', submit: 'Send back',
     placeholder: 'Store says stairs by Pizza were still dirty this morning. Redo tonight.',
     sub: () => 'The issue goes back to In progress with your note.'
+  },
+  task: {
+    title: 'Finish follow-up', label: 'What did you find or do? (optional)', submit: 'Mark done',
+    placeholder: 'Tabitha confirmed the freezer floor looks good.',
+    sub: () => 'Your note is added to the issue\'s activity.'
   },
   reopen: {
     title: 'Reopen issue', label: 'Why reopen it? (optional)', submit: 'Reopen',
@@ -691,6 +718,14 @@ async function submitNote() {
     if (mode === 'resolve') {
       const next = await db.resolveIssue(id, text);
       showToast(next === 'resolved' ? 'Resolved and closed' : 'Sent for approval');
+    } else if (mode === 'task') {
+      await db.completeTask(id, text);
+      showToast('Follow-up done');
+      closeSheet('noteSheet'); noteState = null;
+      const t = state.tasks.find((x) => x.id === id);
+      await refreshAfterChange(t?.issue_id ?? -1);
+      btn.disabled = false;
+      return;
     } else if (mode === 'sendback') {
       await db.reviewIssue(id, false, text);
       showToast('Sent back to In progress');
@@ -735,8 +770,135 @@ async function postComment(e) {
 function friendlyDbError(e) {
   const m = String(e?.message || '');
   if (/function .* does not exist|could not find the function/i.test(m)) return 'CSMD needs a database update before this works. Ask your admin.';
-  if (/Only an admin|Describe|Say why|already|not waiting|not closed|Write a comment|Use Resolve/i.test(m)) return m.replace(/^.*?:\s*/, '') + (m.endsWith('.') ? '' : '.');
+  if (/relation .*tasks.* does not exist|could not find the table/i.test(m)) return 'Tasks need a database update first. Ask your admin.';
+  if (/Only an admin|Only the person|Describe|Say why|already|not waiting|not closed|Write a comment|Use Resolve|Task not found/i.test(m)) return m.replace(/^.*?:\s*/, '') + (m.endsWith('.') ? '' : '.');
   return "Couldn't save. Check your connection and try again.";
+}
+
+// ── FOLLOW-UP TASKS ──────────────────────────────────────────────────
+const myOpenTasks = () => state.tasks.filter((t) => t.status === 'open' && t.assignee_id === state.me?.id);
+
+function dueInfo(t) {
+  if (!t.due_date) return { text: 'No due date', cls: '' };
+  const d = Math.round((new Date(t.due_date + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 864e5);
+  if (t.status === 'done') return { text: `Due ${fmtDate(t.due_date)}`, cls: '' };
+  if (d < 0) return { text: `${-d} day${d === -1 ? '' : 's'} overdue`, cls: 'overdue' };
+  if (d === 0) return { text: 'Due today', cls: 'today' };
+  if (d === 1) return { text: 'Due tomorrow', cls: '' };
+  return { text: `Due ${fmtDate(t.due_date)}`, cls: '' };
+}
+
+function taskCardHTML(t) {
+  const s = state.byId.get(t.store_id);
+  const due = dueInfo(t);
+  const issue = t.issue_id ? state.issues.find((i) => i.id === t.issue_id) : null;
+  const canFinish = t.assignee_id === state.me?.id || canSeeUsers();
+  const actions = t.status === 'open'
+    ? (canFinish ? `<button class="btn btn-sm resolve" data-act="taskdone" data-id="${t.id}"><i class="ti ti-check" aria-hidden="true"></i>Done</button>` : '')
+    : `<button class="btn btn-sm" data-act="taskreopen" data-id="${t.id}">Undo</button>`;
+  return `<article class="task-card ${due.cls === 'overdue' ? 'overdue' : ''} ${t.status === 'done' ? 'done' : ''}">
+    <div class="task-title">${esc(t.title)}</div>
+    <div class="task-actions">${actions}${isAdmin() ? `<button class="btn btn-sm icon" data-act="taskdelete" data-id="${t.id}" aria-label="Delete follow-up"><i class="ti ti-trash" aria-hidden="true"></i></button>` : ''}</div>
+    <div class="task-meta">
+      <span class="task-due ${due.cls}">${esc(t.status === 'done' ? `Done ${t.done_at ? fmtDateTime(t.done_at) : ''}` : due.text)}</span>
+      ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
+      ${state.taskFilter !== 'mine' || t.assignee_id !== state.me?.id ? `<span>· ${esc(t.assignee_name || 'Unassigned')}</span>` : ''}
+      ${t.source === 'email' ? '<span class="tag">From email</span>' : ''}
+      ${t.done_note ? `<span>· ${esc(t.done_note)}</span>` : ''}
+    </div>
+    ${issue ? `<button class="task-link" data-act="issue" data-id="${issue.id}">Open issue: ${esc(issue.description.slice(0, 70))}${issue.description.length > 70 ? '…' : ''}</button>` : ''}
+  </article>`;
+}
+
+function renderTasks() {
+  $('taskAllChip').hidden = !canSeeUsers();
+  if (!canSeeUsers() && state.taskFilter === 'all') state.taskFilter = 'mine';
+  $('taskChips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === state.taskFilter));
+  const list = $('taskList');
+  let rows;
+  if (state.taskFilter === 'done') rows = state.tasks.filter((t) => t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
+    .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
+  else rows = state.tasks.filter((t) => t.status === 'open' && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
+    .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
+  const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
+  $('tasksSub').textContent = state.taskFilter === 'done' ? `${rows.length} finished` : `${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
+  if (!rows.length) {
+    list.innerHTML = emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : '');
+    return;
+  }
+  if (state.taskFilter === 'done') { list.innerHTML = rows.map(taskCardHTML).join(''); return; }
+  const late = rows.filter((t) => dueInfo(t).cls === 'overdue');
+  const rest = rows.filter((t) => dueInfo(t).cls !== 'overdue');
+  list.innerHTML = (late.length ? `<div class="task-group bad">Overdue</div>${late.map(taskCardHTML).join('')}` : '')
+    + (rest.length ? `${late.length ? '<div class="task-group">Coming up</div>' : ''}${rest.map(taskCardHTML).join('')}` : '');
+}
+
+function followUpsHTML(issue) {
+  const tasks = state.tasks.filter((t) => t.issue_id === issue.id);
+  if (!tasks.length && !isAdmin()) return '';
+  return `<h3 class="section-title">Follow-ups</h3>
+    <div class="is-tasks">
+      ${tasks.map((t) => `<div class="is-task ${t.status === 'done' ? 'done' : ''}"><div>${esc(t.title)}<br><span>${esc(t.assignee_name || 'Unassigned')} · ${esc(t.status === 'done' ? 'Done' : dueInfo(t).text)}</span></div>
+        ${t.status === 'open' && (t.assignee_id === state.me?.id || canSeeUsers()) ? `<button class="btn btn-sm resolve" data-act="taskdone" data-id="${t.id}">Done</button>` : ''}</div>`).join('')}
+      ${isAdmin() ? `<button class="btn btn-sm" data-act="addtask" data-id="${issue.id}"><i class="ti ti-plus" aria-hidden="true"></i>Add follow-up</button>` : ''}
+    </div>`;
+}
+
+let taskIssueId = null;
+function openTaskSheet(issueId) {
+  const i = state.issues.find((x) => x.id === issueId);
+  if (!i) return;
+  taskIssueId = issueId;
+  const s = state.byId.get(i.store_id);
+  $('taskSheetSub').textContent = `${s?.name || i.store_id} · ${i.description.slice(0, 80)}${i.description.length > 80 ? '…' : ''}`;
+  $('taskTitle').value = '';
+  const staff = state.profiles.filter((p) => STAFF.includes(p.role))
+    .sort((a, b) => String(a.full_name || a.email).localeCompare(String(b.full_name || b.email)));
+  $('taskAssignee').innerHTML = staff.map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email)} · ${esc(ROLE_LABEL[p.role])}</option>`).join('')
+    || '<option value="">No team members yet</option>';
+  const d = new Date(); d.setDate(d.getDate() + 1);
+  $('taskDue').value = d.toISOString().split('T')[0];
+  $('taskError').hidden = true;
+  openSheet('taskSheet');
+}
+
+async function saveTask() {
+  const title = $('taskTitle').value.trim();
+  const who = $('taskAssignee').value;
+  const err = $('taskError');
+  if (title.length < 3) { err.textContent = 'Say what needs to happen.'; err.hidden = false; return; }
+  if (!who) { err.textContent = 'Pick who it is for. Team members appear here once they have a role.'; err.hidden = false; return; }
+  const p = state.profiles.find((x) => x.id === who);
+  const i = state.issues.find((x) => x.id === taskIssueId);
+  const btn = $('taskSave'); btn.disabled = true;
+  try {
+    await db.addTask({
+      issue_id: taskIssueId, store_id: i?.store_id || null, title,
+      assignee_id: who, assignee_name: p?.full_name || p?.email || '',
+      due_date: $('taskDue').value || null, source: 'manual',
+      created_by: state.me.id, created_by_name: state.me.full_name || state.me.email
+    });
+    closeSheet('taskSheet');
+    showToast(`Follow-up added for ${p?.full_name || p?.email}`);
+    await refreshAfterChange(taskIssueId);
+  } catch (e) {
+    err.textContent = friendlyDbError(e); err.hidden = false;
+  }
+  btn.disabled = false;
+}
+
+async function reopenTask(id) {
+  try { await db.reopenTask(id); await loadAll(); rerender(); showToast('Follow-up reopened'); }
+  catch (e) { showToast(friendlyDbError(e), { error: true }); }
+}
+
+async function deleteTask(id) {
+  const t = state.tasks.find((x) => x.id === id);
+  try {
+    await db.deleteTask(id);
+    showToast('Follow-up deleted');
+    await refreshAfterChange(t?.issue_id ?? -1);
+  } catch (e) { showToast(friendlyDbError(e), { error: true }); }
 }
 
 // ── STORE DETAIL ──────────────────────────────────────────────────────
