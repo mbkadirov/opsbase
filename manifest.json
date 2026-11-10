@@ -1,6 +1,6 @@
 {
-  "name": "OpsBase",
-  "short_name": "OpsBase",
+  "name": "CSMD",
+  "short_name": "CSMD",
   "description": "Field operations hub for store health and issue tracking",
   "start_url": "/",
   "display": "standalone",

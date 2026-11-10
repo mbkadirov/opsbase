@@ -92,7 +92,7 @@ function showPending() {
   const disabled = state.me?.role === 'disabled';
   $('pendingTitle').textContent = disabled ? 'Access removed' : 'Waiting for access';
   $('pendingText').textContent = disabled
-    ? 'Your OpsBase access has been turned off. Contact Murod if you think this is a mistake.'
+    ? 'Your CSMD access has been turned off. Contact Murod if you think this is a mistake.'
     : `You're signed in as ${state.me?.email || 'a new user'}. An admin needs to give you a role before you can see stores. Ask Murod to approve you, then tap Check again.`;
   switchScreen('pending');
 }
@@ -124,7 +124,7 @@ function friendlyAuthError(e) {
   if (/already registered/i.test(m)) return 'That email already has an account. Sign in instead.';
   if (/rate limit|too many/i.test(m)) return 'Too many tries. Wait a minute and try again.';
   if (/password/i.test(m)) return 'Use a password with at least 8 characters.';
-  return "Couldn't reach OpsBase. Check your connection and try again.";
+  return "Couldn't reach CSMD. Check your connection and try again.";
 }
 
 function bindAuthEvents() {
@@ -728,7 +728,7 @@ async function postComment(e) {
 
 function friendlyDbError(e) {
   const m = String(e?.message || '');
-  if (/function .* does not exist|could not find the function/i.test(m)) return 'OpsBase needs a database update before this works. Ask your admin.';
+  if (/function .* does not exist|could not find the function/i.test(m)) return 'CSMD needs a database update before this works. Ask your admin.';
   if (/Only an admin|Describe|Say why|already|not waiting|not closed|Write a comment|Use Resolve/i.test(m)) return m.replace(/^.*?:\s*/, '') + (m.endsWith('.') ? '' : '.');
   return "Couldn't save. Check your connection and try again.";
 }
