@@ -377,3 +377,5 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .is-task { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; font-size: 14px; background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; }
 .is-task span { color: var(--muted); font-size: 13px; }
 .is-task.done { opacity: .65; text-decoration: line-through; }
+.task-group.warn { color: var(--warn); }
+.task-empty { color: var(--muted); font-size: 14px; margin: 4px 0 0; }

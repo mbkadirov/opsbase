@@ -446,7 +446,7 @@ function renderHeader() {
   const badge = $('navBadge');
   badge.hidden = !open;
   badge.textContent = open > 99 ? '99+' : String(open);
-  const mineDue = myOpenTasks().filter((t) => !t.due_date || t.due_date <= today()).length;
+  const mineDue = myOpenTasks().filter((t) => !t.due_date || t.due_date <= today()).length + (isAdmin() ? approvalQueue().length : 0);
   const tb = $('taskBadge');
   tb.hidden = !mineDue;
   tb.textContent = String(mineDue);
@@ -776,6 +776,9 @@ function friendlyDbError(e) {
 }
 
 // ── FOLLOW-UP TASKS ──────────────────────────────────────────────────
+// Fixes waiting for an admin to approve; shown at the top of an admin's Tasks tab.
+const approvalQueue = () => state.issues.filter((i) => i.status === 'pending review' && isActiveStore(state.byId.get(i.store_id)))
+  .sort((a, b) => (a.resolved_at || a.date || '').localeCompare(b.resolved_at || b.date || ''));
 const myOpenTasks = () => state.tasks.filter((t) => t.status === 'open' && t.assignee_id === state.me?.id);
 
 function dueInfo(t) {
@@ -821,16 +824,23 @@ function renderTasks() {
   else rows = state.tasks.filter((t) => t.status === 'open' && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
     .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
   const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
-  $('tasksSub').textContent = state.taskFilter === 'done' ? `${rows.length} finished` : `${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
+  const approvals = state.taskFilter !== 'done' && isAdmin() ? approvalQueue() : [];
+  $('tasksSub').textContent = state.taskFilter === 'done' ? `${rows.length} finished`
+    : `${approvals.length ? `${approvals.length} to approve · ` : ''}${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
+  const approvalHTML = approvals.length
+    ? `<div class="task-group warn">Needs your approval</div>${approvals.map((i) => issueCardHTML(i)).join('')}` : '';
   if (!rows.length) {
-    list.innerHTML = emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : '');
+    list.innerHTML = approvalHTML + (approvals.length && state.taskFilter !== 'done'
+      ? '<div class="task-group">Follow-ups</div><p class="task-empty">No open follow-ups.</p>'
+      : emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : ''));
     return;
   }
   if (state.taskFilter === 'done') { list.innerHTML = rows.map(taskCardHTML).join(''); return; }
   const late = rows.filter((t) => dueInfo(t).cls === 'overdue');
   const rest = rows.filter((t) => dueInfo(t).cls !== 'overdue');
-  list.innerHTML = (late.length ? `<div class="task-group bad">Overdue</div>${late.map(taskCardHTML).join('')}` : '')
-    + (rest.length ? `${late.length ? '<div class="task-group">Coming up</div>' : ''}${rest.map(taskCardHTML).join('')}` : '');
+  list.innerHTML = approvalHTML
+    + (late.length ? `<div class="task-group bad">Overdue</div>${late.map(taskCardHTML).join('')}` : '')
+    + (rest.length ? `${late.length || approvals.length ? `<div class="task-group">${late.length ? 'Coming up' : 'Follow-ups'}</div>` : ''}${rest.map(taskCardHTML).join('')}` : '');
 }
 
 function followUpsHTML(issue) {
