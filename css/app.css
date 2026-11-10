@@ -379,3 +379,4 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .is-task.done { opacity: .65; text-decoration: line-through; }
 .task-group.warn { color: var(--warn); }
 .task-empty { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+#toastAction { white-space: nowrap; }

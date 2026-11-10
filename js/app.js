@@ -573,6 +573,7 @@ function issueActions(i) {
   if (i.status === 'pending review' && isAdmin()) {
     a.push(`<button class="btn btn-sm approve" data-act="approve" data-id="${i.id}"><i class="ti ti-circle-check" aria-hidden="true"></i>Approve</button>`);
     a.push(`<button class="btn btn-sm" data-act="sendback" data-id="${i.id}">Send back</button>`);
+    a.push(`<button class="btn btn-sm icon" data-act="addtask" data-id="${i.id}" aria-label="Add follow-up" title="Add follow-up"><i class="ti ti-calendar-plus" aria-hidden="true"></i></button>`);
   }
   if (i.status === 'resolved' && isAdmin()) a.push(`<button class="btn btn-sm" data-act="reopen" data-id="${i.id}">Reopen</button>`);
   if (i.status !== 'resolved') a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
@@ -745,8 +746,8 @@ async function submitNote() {
 async function approveIssue(id) {
   try {
     await db.reviewIssue(id, true, '');
-    showToast('Approved and closed');
     await refreshAfterChange(id);
+    showToast('Approved and closed', { action: 'Add follow-up', onAction: () => openTaskSheet(id), duration: 8000 });
   } catch (e) {
     showToast(friendlyDbError(e), { error: true });
   }
