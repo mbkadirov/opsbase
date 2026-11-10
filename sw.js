@@ -1,5 +1,5 @@
 // Network first, so a new version shows up on the next open; cache is only an offline fallback.
-const CACHE = 'opsbase-v10';
+const CACHE = 'opsbase-v11';
 const ASSETS = ['/', '/index.html', '/css/app.css', '/js/app.js', '/js/health.js', '/js/supabase.js'];
 
 self.addEventListener('install', (e) => {

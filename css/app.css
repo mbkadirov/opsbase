@@ -380,3 +380,15 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .task-group.warn { color: var(--warn); }
 .task-empty { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
 #toastAction { white-space: nowrap; }
+
+.field-label { font-size: 14px; font-weight: 500; color: var(--muted); }
+.day-picks { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.day-picks button { min-height: 40px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; }
+.day-picks button.on { background: var(--text); border-color: var(--text); color: var(--bg); }
+.until-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.until-row input { flex: 1 1 150px; min-width: 0; }
+.field-hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.tag.repeat { background: var(--accent-soft); color: var(--accent); }
+.task-last { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.log-row { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; }
+.sheet { max-height: 92dvh; overflow-y: auto; }

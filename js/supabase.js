@@ -54,6 +54,11 @@ export const db = {
     return check(await supabase.from('tasks').select('*').order('status').order('due_date', { ascending: true, nullsFirst: false }).order('created_at'));
   },
   async addTask(task) { return check(await supabase.from('tasks').insert(task).select()); },
+  async updateTask(id, patch) {
+    const rows = check(await supabase.from('tasks').update(patch).eq('id', id).select('id'));
+    if (!rows.length) throw new Error('not allowed');
+  },
+  async getTaskLog() { return check(await supabase.from('task_log').select('*').order('done_at', { ascending: false }).limit(150)); },
   async deleteTask(id) {
     const rows = check(await supabase.from('tasks').delete().eq('id', id).select('id'));
     if (!rows.length) throw new Error('not allowed');

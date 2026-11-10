@@ -248,6 +248,7 @@
           <h1 class="page-title" id="tasksTitle">Tasks</h1>
           <p class="page-sub" id="tasksSub">Follow-ups with due dates</p>
         </div>
+        <button class="btn btn-ghost" id="newTaskBtn" hidden><i class="ti ti-plus" aria-hidden="true"></i>New task</button>
       </div>
       <div class="chips" id="taskChips" role="tablist" aria-label="Which tasks">
         <button class="chip active" data-val="mine">Mine</button>
@@ -368,15 +369,44 @@
       <label for="taskTitle">What needs to happen</label>
       <textarea id="taskTitle" rows="3" placeholder="Check with Tabitha on Friday that the Bakery freezer floor passed."></textarea>
     </div>
+    <div class="field" id="taskStoreField" hidden>
+      <label for="taskStore">Store</label>
+      <select id="taskStore"></select>
+    </div>
     <div class="field-row">
       <div class="field">
         <label for="taskAssignee">Who</label>
         <select id="taskAssignee"></select>
       </div>
       <div class="field">
-        <label for="taskDue">Due</label>
+        <label for="taskDue" id="taskDueLabel">Due</label>
         <input type="date" id="taskDue">
       </div>
+    </div>
+    <div class="field">
+      <label for="taskRepeat">How often</label>
+      <select id="taskRepeat">
+        <option value="none">One time</option>
+        <option value="daily">Every day</option>
+        <option value="weekly">Every week on…</option>
+        <option value="monthly">Every month</option>
+      </select>
+    </div>
+    <div class="field" id="taskDaysField" hidden>
+      <span class="field-label">On these days</span>
+      <div class="day-picks" id="taskDays">
+        <button type="button" data-d="1">Mon</button><button type="button" data-d="2">Tue</button><button type="button" data-d="3">Wed</button><button type="button" data-d="4">Thu</button><button type="button" data-d="5">Fri</button><button type="button" data-d="6">Sat</button><button type="button" data-d="0">Sun</button>
+      </div>
+    </div>
+    <div class="field" id="taskUntilField" hidden>
+      <label for="taskUntil">Until</label>
+      <div class="until-row">
+        <input type="date" id="taskUntil">
+        <button type="button" class="btn btn-sm" data-until="7">1 week</button>
+        <button type="button" class="btn btn-sm" data-until="30">1 month</button>
+        <button type="button" class="btn btn-sm" data-until="">No end</button>
+      </div>
+      <p class="field-hint" id="taskRepeatHint"></p>
     </div>
     <p class="field-error" id="taskError" hidden></p>
     <div class="sheet-actions">

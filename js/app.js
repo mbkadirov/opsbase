@@ -25,6 +25,7 @@ const state = {
   authMode: 'signin',
   assignUser: null,
   tasks: [],
+  taskLog: [],
   taskFilter: 'mine'
 };
 
@@ -42,7 +43,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const acctRank = (a) => { const i = ACCOUNT_ORDER.indexOf(a); return i < 0 ? 99 : i; };
 const storeNum = (s) => parseInt(String(s.name).replace(/^\D+/, ''), 10) || 0;
 const city = (s) => s?.address || s?.state || '';
-const today = () => new Date().toISOString().split('T')[0];
+const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => isoLocal(new Date());
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoLocal(d); };
 
 // ── INIT ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -313,14 +316,16 @@ async function saveAssignments() {
 async function loadAll() {
   if (!state.me) return;
   try {
-    const [stores, issues, tasks, profiles] = await Promise.all([
+    const [stores, issues, tasks, taskLog, profiles] = await Promise.all([
       db.getStores(), db.getIssues(),
       db.getTasks().catch(() => []),
+      db.getTaskLog().catch(() => []),
       canSeeUsers() ? db.getProfiles().catch(() => []) : Promise.resolve([])
     ]);
     state.stores = stores;
     state.issues = issues;
     state.tasks = tasks;
+    state.taskLog = taskLog;
     if (profiles.length) state.profiles = profiles;
     state.byId = new Map(stores.map((s) => [s.id, s]));
     state.loaded = true;
@@ -356,6 +361,20 @@ function bindEvents() {
   chipGroup('taskChips', (v) => { state.taskFilter = v; renderTasks(); });
   $('taskCancel').addEventListener('click', () => closeSheet('taskSheet'));
   $('taskSave').addEventListener('click', saveTask);
+  $('newTaskBtn').addEventListener('click', () => openTaskSheet(null));
+  $('taskRepeat').addEventListener('change', syncRepeatFields);
+  $('taskDue').addEventListener('change', syncRepeatFields);
+  $('taskUntil').addEventListener('change', syncRepeatFields);
+  $('taskDays').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-d]'); if (!b) return;
+    b.classList.toggle('on'); syncRepeatFields();
+  });
+  $('taskUntilField').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-until]'); if (!b) return;
+    const n = b.dataset.until;
+    $('taskUntil').value = n ? addDays($('taskDue').value || today(), Number(n) - 1) : '';
+    syncRepeatFields();
+  });
 
   $('logForm').addEventListener('submit', handleSaveIssue);
   $('logDesc').addEventListener('input', () => { $('logError').hidden = true; });
@@ -400,6 +419,7 @@ function bindEvents() {
     else if (act === 'taskdone') openNote('task', Number(id));
     else if (act === 'taskreopen') reopenTask(Number(id));
     else if (act === 'taskdelete') deleteTask(Number(id));
+    else if (act === 'taskedit') openTaskSheet(null, Number(id));
   });
 }
 
@@ -576,7 +596,7 @@ function issueActions(i) {
     a.push(`<button class="btn btn-sm icon" data-act="addtask" data-id="${i.id}" aria-label="Add follow-up" title="Add follow-up"><i class="ti ti-calendar-plus" aria-hidden="true"></i></button>`);
   }
   if (i.status === 'resolved' && isAdmin()) a.push(`<button class="btn btn-sm" data-act="reopen" data-id="${i.id}">Reopen</button>`);
-  if (i.status !== 'resolved') a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
+  if (i.status !== 'resolved' && !(i.status === 'pending review' && isAdmin())) a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
   if (canDelete()) a.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
   return a.join('');
 }
@@ -681,7 +701,7 @@ const NOTE_MODES = {
     sub: () => 'The issue goes back to In progress with your note.'
   },
   task: {
-    title: 'Finish follow-up', label: 'What did you find or do? (optional)', submit: 'Mark done',
+    title: 'Finish task', label: 'What did you find or do? (optional)', submit: 'Mark done',
     placeholder: 'Tabitha confirmed the freezer floor looks good.',
     sub: () => 'Your note is added to the issue\'s activity.'
   },
@@ -721,9 +741,9 @@ async function submitNote() {
       showToast(next === 'resolved' ? 'Resolved and closed' : 'Sent for approval');
     } else if (mode === 'task') {
       await db.completeTask(id, text);
-      showToast('Follow-up done');
       closeSheet('noteSheet'); noteState = null;
       const t = state.tasks.find((x) => x.id === id);
+      showToast(t && t.repeat && t.repeat !== 'none' ? 'Done. It moves to the next date.' : 'Task done');
       await refreshAfterChange(t?.issue_id ?? -1);
       btn.disabled = false;
       return;
@@ -802,26 +822,30 @@ function taskCardHTML(t) {
     : `<button class="btn btn-sm" data-act="taskreopen" data-id="${t.id}">Undo</button>`;
   return `<article class="task-card ${due.cls === 'overdue' ? 'overdue' : ''} ${t.status === 'done' ? 'done' : ''}">
     <div class="task-title">${esc(t.title)}</div>
-    <div class="task-actions">${actions}${isAdmin() ? `<button class="btn btn-sm icon" data-act="taskdelete" data-id="${t.id}" aria-label="Delete follow-up"><i class="ti ti-trash" aria-hidden="true"></i></button>` : ''}</div>
+    <div class="task-actions">${actions}${isAdmin() ? `<button class="btn btn-sm icon" data-act="taskedit" data-id="${t.id}" aria-label="Edit task"><i class="ti ti-pencil" aria-hidden="true"></i></button><button class="btn btn-sm icon" data-act="taskdelete" data-id="${t.id}" aria-label="Delete task"><i class="ti ti-trash" aria-hidden="true"></i></button>` : ''}</div>
     <div class="task-meta">
       <span class="task-due ${due.cls}">${esc(t.status === 'done' ? `Done ${t.done_at ? fmtDateTime(t.done_at) : ''}` : due.text)}</span>
       ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
       ${state.taskFilter !== 'mine' || t.assignee_id !== state.me?.id ? `<span>· ${esc(t.assignee_name || 'Unassigned')}</span>` : ''}
+      ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
       ${t.source === 'email' ? '<span class="tag">From email</span>' : ''}
-      ${t.done_note ? `<span>· ${esc(t.done_note)}</span>` : ''}
+      ${t.status === 'done' && t.done_note ? `<span>· ${esc(t.done_note)}</span>` : ''}
     </div>
+    ${t.status === 'open' && t.last_done_at ? `<div class="task-last">Last done ${esc(fmtDateTime(t.last_done_at))}${t.last_done_by_name ? ' by ' + esc(t.last_done_by_name) : ''}${t.done_note ? ' · ' + esc(t.done_note) : ''}</div>` : ''}
     ${issue ? `<button class="task-link" data-act="issue" data-id="${issue.id}">Open issue: ${esc(issue.description.slice(0, 70))}${issue.description.length > 70 ? '…' : ''}</button>` : ''}
   </article>`;
 }
 
 function renderTasks() {
   $('taskAllChip').hidden = !canSeeUsers();
+  $('newTaskBtn').hidden = !isAdmin();
   if (!canSeeUsers() && state.taskFilter === 'all') state.taskFilter = 'mine';
   $('taskChips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === state.taskFilter));
   const list = $('taskList');
   let rows;
-  if (state.taskFilter === 'done') rows = state.tasks.filter((t) => t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
-    .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
+  if (state.taskFilter === 'done') rows = state.taskLog.length ? state.taskLog
+    : state.tasks.filter((t) => t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
+      .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
   else rows = state.tasks.filter((t) => t.status === 'open' && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
     .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
   const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
@@ -836,12 +860,35 @@ function renderTasks() {
       : emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : ''));
     return;
   }
-  if (state.taskFilter === 'done') { list.innerHTML = rows.map(taskCardHTML).join(''); return; }
+  if (state.taskFilter === 'done') { list.innerHTML = state.taskLog.length ? doneLogHTML() : rows.map(taskCardHTML).join(''); return; }
   const late = rows.filter((t) => dueInfo(t).cls === 'overdue');
   const rest = rows.filter((t) => dueInfo(t).cls !== 'overdue');
   list.innerHTML = approvalHTML
     + (late.length ? `<div class="task-group bad">Overdue</div>${late.map(taskCardHTML).join('')}` : '')
     + (rest.length ? `${late.length || approvals.length ? `<div class="task-group">${late.length ? 'Coming up' : 'Follow-ups'}</div>` : ''}${rest.map(taskCardHTML).join('')}` : '');
+}
+
+// Every time a task was finished, newest first. Undo only on a one-time task's last finish.
+function doneLogHTML() {
+  const latest = new Map();
+  state.taskLog.forEach((l) => { if (!latest.has(l.task_id)) latest.set(l.task_id, l.id); });
+  return state.taskLog.map((l) => {
+    const t = state.tasks.find((x) => x.id === l.task_id);
+    if (!t) return '';
+    const s = state.byId.get(t.store_id);
+    const undo = t.status === 'done' && latest.get(t.id) === l.id
+      ? `<button class="btn btn-sm" data-act="taskreopen" data-id="${t.id}">Undo</button>` : '';
+    return `<article class="task-card done">
+      <div class="log-row"><div class="task-title">${esc(t.title)}</div><div class="task-actions">${undo}</div></div>
+      <div class="task-meta">
+        <span class="task-due">Done ${esc(fmtDateTime(l.done_at))}</span>
+        ${l.done_by_name ? `<span>· ${esc(l.done_by_name)}</span>` : ''}
+        ${s ? `<span>· ${esc(s.name)} ${esc(city(s))}</span>` : ''}
+        ${l.due_date && t.repeat !== 'none' ? `<span>· for ${esc(fmtDate(l.due_date))}</span>` : ''}
+        ${l.note ? `<span>· ${esc(l.note)}</span>` : ''}
+      </div>
+    </article>`;
+  }).join('');
 }
 
 function followUpsHTML(issue) {
@@ -855,20 +902,64 @@ function followUpsHTML(issue) {
     </div>`;
 }
 
-let taskIssueId = null;
-function openTaskSheet(issueId) {
-  const i = state.issues.find((x) => x.id === issueId);
-  if (!i) return;
-  taskIssueId = issueId;
-  const s = state.byId.get(i.store_id);
-  $('taskSheetSub').textContent = `${s?.name || i.store_id} · ${i.description.slice(0, 80)}${i.description.length > 80 ? '…' : ''}`;
-  $('taskTitle').value = '';
+let taskIssueId = null, taskEditId = null;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+
+function repeatText(t) {
+  const until = t.repeat_until ? ` until ${fmtDate(t.repeat_until)}` : '';
+  if (t.repeat === 'daily') return `Every day${until}`;
+  if (t.repeat === 'weekly') {
+    const days = [...(t.repeat_days || [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+    const label = days.length === 5 && !days.includes(0) && !days.includes(6) ? 'weekday' : days.map((d) => DAY_NAMES[d]).join(', ');
+    return `Every ${label}${until}`;
+  }
+  if (t.repeat === 'monthly') return `Monthly on the ${ordinal(t.repeat_days?.[0] || Number((t.due_date || today()).slice(8)))}${until}`;
+  return '';
+}
+
+function pickedDays() { return [...$('taskDays').querySelectorAll('.on')].map((b) => Number(b.dataset.d)); }
+
+function syncRepeatFields() {
+  const r = $('taskRepeat').value;
+  $('taskDaysField').hidden = r !== 'weekly';
+  $('taskUntilField').hidden = r === 'none';
+  $('taskDueLabel').textContent = r === 'none' ? 'Due' : 'Starts';
+  const due = $('taskDue').value || today();
+  if (r === 'weekly' && !pickedDays().length) {
+    const b = $('taskDays').querySelector(`[data-d="${new Date(due + 'T00:00:00').getDay()}"]`); b && b.classList.add('on');
+  }
+  const preview = { repeat: r, repeat_days: r === 'weekly' ? pickedDays() : r === 'monthly' ? [Number(due.slice(8))] : null, repeat_until: $('taskUntil').value || null, due_date: due };
+  $('taskRepeatHint').textContent = r === 'none' ? '' : repeatText(preview) + (preview.repeat_until ? '' : ' (no end date)');
+}
+
+function openTaskSheet(issueId, editId = null) {
+  const t = editId ? state.tasks.find((x) => x.id === editId) : null;
+  if (editId && !t) return;
+  const i = state.issues.find((x) => x.id === (t ? t.issue_id : issueId));
+  taskIssueId = i ? i.id : null;
+  taskEditId = t ? t.id : null;
+  $('taskSheetTitle').textContent = t ? 'Edit task' : i ? 'Add follow-up' : 'New task';
+  $('taskSave').textContent = t ? 'Save' : i ? 'Add follow-up' : 'Add task';
+  const s = i ? state.byId.get(i.store_id) : null;
+  $('taskSheetSub').textContent = i ? `${s?.name || i.store_id} · ${i.description.slice(0, 80)}${i.description.length > 80 ? '…' : ''}` : 'A task for one of your stores, one time or repeating.';
+  $('taskStoreField').hidden = !!i;
+  if (!i) {
+    const stores = state.stores.filter(isActiveStore);
+    $('taskStore').innerHTML = '<option value="">No specific store</option>' + stores.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · ${esc(city(x))}</option>`).join('');
+    $('taskStore').value = t?.store_id || (state.screen === 'detail' ? state.selectedId || '' : '');
+  }
+  $('taskTitle').value = t?.title || '';
   const staff = state.profiles.filter((p) => STAFF.includes(p.role))
     .sort((a, b) => String(a.full_name || a.email).localeCompare(String(b.full_name || b.email)));
   $('taskAssignee').innerHTML = staff.map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email)} · ${esc(ROLE_LABEL[p.role])}</option>`).join('')
     || '<option value="">No team members yet</option>';
-  const d = new Date(); d.setDate(d.getDate() + 1);
-  $('taskDue').value = d.toISOString().split('T')[0];
+  if (t?.assignee_id) $('taskAssignee').value = t.assignee_id;
+  $('taskDue').value = t?.due_date || (i ? addDays(today(), 1) : today());
+  $('taskRepeat').value = t?.repeat || 'none';
+  $('taskUntil').value = t?.repeat_until || '';
+  $('taskDays').querySelectorAll('[data-d]').forEach((b) => b.classList.toggle('on', t?.repeat === 'weekly' && (t.repeat_days || []).includes(Number(b.dataset.d))));
+  syncRepeatFields();
   $('taskError').hidden = true;
   openSheet('taskSheet');
 }
@@ -877,29 +968,41 @@ async function saveTask() {
   const title = $('taskTitle').value.trim();
   const who = $('taskAssignee').value;
   const err = $('taskError');
-  if (title.length < 3) { err.textContent = 'Say what needs to happen.'; err.hidden = false; return; }
-  if (!who) { err.textContent = 'Pick who it is for. Team members appear here once they have a role.'; err.hidden = false; return; }
+  const repeat = $('taskRepeat').value;
+  const due = $('taskDue').value || today();
+  const until = repeat === 'none' ? null : $('taskUntil').value || null;
+  const days = repeat === 'weekly' ? pickedDays() : repeat === 'monthly' ? [Number(due.slice(8))] : null;
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  if (title.length < 3) return fail('Say what needs to happen.');
+  if (!who) return fail('Pick who it is for. Team members appear here once they have a role.');
+  if (repeat === 'weekly' && !days.length) return fail('Pick at least one day.');
+  if (until && until < due) return fail('The end date is before the start date.');
+  let first = due;
+  if (repeat === 'weekly' && !days.includes(new Date(due + 'T00:00:00').getDay())) {
+    for (let k = 1; k <= 7; k++) { const d = addDays(due, k); if (days.includes(new Date(d + 'T00:00:00').getDay())) { first = d; break; } }
+  }
   const p = state.profiles.find((x) => x.id === who);
   const i = state.issues.find((x) => x.id === taskIssueId);
+  const fields = {
+    title, assignee_id: who, assignee_name: p?.full_name || p?.email || '',
+    due_date: first, repeat, repeat_days: days, repeat_until: until,
+    store_id: i ? i.store_id : $('taskStore').value || null
+  };
   const btn = $('taskSave'); btn.disabled = true;
   try {
-    await db.addTask({
-      issue_id: taskIssueId, store_id: i?.store_id || null, title,
-      assignee_id: who, assignee_name: p?.full_name || p?.email || '',
-      due_date: $('taskDue').value || null, source: 'manual',
-      created_by: state.me.id, created_by_name: state.me.full_name || state.me.email
-    });
+    if (taskEditId) await db.updateTask(taskEditId, fields);
+    else await db.addTask({ ...fields, issue_id: taskIssueId, source: 'manual', created_by: state.me.id, created_by_name: state.me.full_name || state.me.email });
     closeSheet('taskSheet');
-    showToast(`Follow-up added for ${p?.full_name || p?.email}`);
-    await refreshAfterChange(taskIssueId);
+    showToast(taskEditId ? 'Task saved' : `${repeat === 'none' ? 'Task' : 'Repeating task'} added for ${p?.full_name || p?.email}`);
+    await refreshAfterChange(taskIssueId ?? -1);
   } catch (e) {
-    err.textContent = friendlyDbError(e); err.hidden = false;
+    fail(/repeat|column/i.test(e.message) ? 'The database needs the repeating-tasks update first (migration 006).' : friendlyDbError(e));
   }
   btn.disabled = false;
 }
 
 async function reopenTask(id) {
-  try { await db.reopenTask(id); await loadAll(); rerender(); showToast('Follow-up reopened'); }
+  try { await db.reopenTask(id); await loadAll(); rerender(); showToast('Task reopened'); }
   catch (e) { showToast(friendlyDbError(e), { error: true }); }
 }
 
@@ -907,7 +1010,7 @@ async function deleteTask(id) {
   const t = state.tasks.find((x) => x.id === id);
   try {
     await db.deleteTask(id);
-    showToast('Follow-up deleted');
+    showToast('Task deleted');
     await refreshAfterChange(t?.issue_id ?? -1);
   } catch (e) { showToast(friendlyDbError(e), { error: true }); }
 }
