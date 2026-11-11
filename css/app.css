@@ -204,6 +204,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 .tag.status-open { background: var(--warn-soft); color: var(--warn); }
 .tag.status-in-progress { background: var(--accent-soft); color: var(--accent); }
 .tag.status-resolved { background: var(--ok-soft); color: var(--ok); }
+.tag.status-not-valid { background: var(--surface-2, var(--border)); color: var(--muted); text-decoration: line-through; }
+.is-invalid-link { background: none; border: 0; padding: 8px 0 0; color: var(--muted); font: inherit; font-size: 14px; text-decoration: underline; cursor: pointer; }
 .tag.pts { font-family: var(--mono); font-weight: 400; }
 .issue-desc { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
 .issue-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }

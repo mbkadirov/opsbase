@@ -44,6 +44,7 @@ export const db = {
 
   async resolveIssue(id, note) { return check(await supabase.rpc('resolve_issue', { p_issue: id, p_note: note })); },
   async reviewIssue(id, approve, note = '') { return check(await supabase.rpc('review_issue', { p_issue: id, p_approve: approve, p_note: note })); },
+  async invalidateIssue(id, note) { return check(await supabase.rpc('invalidate_issue', { p_issue: id, p_note: note })); },
   async reopenIssue(id, note = '') { return check(await supabase.rpc('reopen_issue', { p_issue: id, p_note: note })); },
   async addComment(id, body) { return check(await supabase.rpc('add_issue_comment', { p_issue: id, p_body: body })); },
   async getComments(id) {

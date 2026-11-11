@@ -413,6 +413,7 @@ function bindEvents() {
     else if (act === 'approve') approveIssue(Number(id));
     else if (act === 'sendback') openNote('sendback', Number(id));
     else if (act === 'reopen') openNote('reopen', Number(id));
+    else if (act === 'invalid') openNote('invalid', Number(id));
     else if (act === 'edit') editIssue(Number(id));
     else if (act === 'delete') deleteIssue(Number(id));
     else if (act === 'assign') openAssign(id);
@@ -554,6 +555,7 @@ function issueMatches(i) {
   if (state.issueStatus === 'in progress' && i.status !== 'in progress') return false;
   if (state.issueStatus === 'pending review' && i.status !== 'pending review') return false;
   if (state.issueStatus === 'resolved' && i.status !== 'resolved') return false;
+  if (state.issueStatus === 'not valid' && i.status !== 'not valid') return false;
   const s = state.byId.get(i.store_id);
   if (state.issueAccount && s?.account !== state.issueAccount) return false;
   if (state.issueCategory && i.category !== state.issueCategory) return false;
@@ -588,7 +590,7 @@ function issueSort(a, b) {
   return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
 }
 
-const STATUS_LABEL = { open: 'Open', 'in progress': 'In progress', 'pending review': 'Needs approval', resolved: 'Resolved' };
+const STATUS_LABEL = { open: 'Open', 'in progress': 'In progress', 'pending review': 'Needs approval', resolved: 'Resolved', 'not valid': 'Not valid' };
 
 function issueActions(i) {
   const a = [];
@@ -600,8 +602,8 @@ function issueActions(i) {
     a.push(`<button class="btn btn-sm" data-act="sendback" data-id="${i.id}">Send back</button>`);
     a.push(`<button class="btn btn-sm icon" data-act="addtask" data-id="${i.id}" aria-label="Add follow-up" title="Add follow-up"><i class="ti ti-calendar-plus" aria-hidden="true"></i></button>`);
   }
-  if (i.status === 'resolved' && isAdmin()) a.push(`<button class="btn btn-sm" data-act="reopen" data-id="${i.id}">Reopen</button>`);
-  if (i.status !== 'resolved' && !(i.status === 'pending review' && isAdmin())) a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
+  if ((i.status === 'resolved' || i.status === 'not valid') && isAdmin()) a.push(`<button class="btn btn-sm" data-act="reopen" data-id="${i.id}">Reopen</button>`);
+  if (i.status !== 'resolved' && i.status !== 'not valid' && !(i.status === 'pending review' && isAdmin())) a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
   if (canDeleteIssue(i)) a.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
   return a.join('');
 }
@@ -644,7 +646,7 @@ function issueCardHTML(i, { showPoints = false, showStore = true } = {}) {
 
 // ── ISSUE DETAIL, COMMENTS, RESOLVE / APPROVE ─────────────────────────
 let openIssueId = null;
-const KIND_LABEL = { comment: 'commented', resolution: 'resolved it', approved: 'approved and closed it', sent_back: 'sent it back', reopened: 'reopened it' };
+const KIND_LABEL = { comment: 'commented', resolution: 'resolved it', approved: 'approved and closed it', sent_back: 'sent it back', reopened: 'reopened it', invalid: 'marked it not valid' };
 
 async function openIssue(id) {
   openIssueId = id;
@@ -665,6 +667,7 @@ function renderIssueSheet(comments) {
     ['Logged', fmtDate(i.date) + (isOpen(i) ? ` · ${daysSince(i.date)} days ago` : '')],
     i.assignee ? ['Owner', i.assignee] : null,
     i.resolved_by_name ? ['Resolved by', `${i.resolved_by_name}${i.resolved_at ? ' · ' + fmtDateTime(i.resolved_at) : ''}`] : null,
+    i.approved_by_name && i.status === 'not valid' ? ['Marked not valid', `${i.approved_by_name}${i.approved_at ? ' · ' + fmtDateTime(i.approved_at) : ''}`] : null,
     i.approved_by_name && i.status === 'resolved' ? ['Approved by', `${i.approved_by_name}${i.approved_at ? ' · ' + fmtDateTime(i.approved_at) : ''}`] : null
   ].filter(Boolean);
   const timeline = comments === null
@@ -681,6 +684,7 @@ function renderIssueSheet(comments) {
     <dl class="is-meta">${meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     ${i.resolution && i.status !== 'open' && i.status !== 'in progress' ? `<div class="issue-fix"><b>What was done</b><br>${esc(i.resolution)}</div>` : ''}
     <div class="is-actions issue-actions">${issueActions(i)}</div>
+    ${isAdmin() && i.status !== 'not valid' && i.status !== 'resolved' ? `<button class="is-invalid-link" data-act="invalid" data-id="${i.id}">Not valid? Store was mistaken</button>` : ''}
     ${followUpsHTML(i)}
     <h3 class="section-title">Activity</h3>
     ${timeline}`;
@@ -720,6 +724,11 @@ const NOTE_MODES = {
     placeholder: 'Bakery floor drains still clogged after the nightly scrub.',
     sub: () => 'This logs a new open issue for the store. The task is closed.'
   },
+  invalid: {
+    title: 'Mark not valid', label: 'Why is it not valid?', submit: 'Mark not valid',
+    placeholder: 'Block Whitener is on the approved chemicals list. Store was mistaken.',
+    sub: () => 'It stays on record but costs the store no health points. Its open follow-ups are closed.'
+  },
   reopen: {
     title: 'Reopen issue', label: 'Why reopen it? (optional)', submit: 'Reopen',
     placeholder: 'Same problem reported again on Nov 12.',
@@ -749,7 +758,7 @@ async function submitNote() {
   const text = $('noteText').value.trim();
   const err = $('noteError');
   if (mode === 'resolve' && text.length < 5) { err.textContent = 'Describe what was done to fix it.'; err.hidden = false; return; }
-  if ((mode === 'sendback' || mode === 'tasksendback') && text.length < 3) { err.textContent = 'Say why it is being sent back.'; err.hidden = false; return; }
+  if ((mode === 'sendback' || mode === 'tasksendback' || mode === 'invalid') && text.length < 3) { err.textContent = 'Say why it is being sent back.'; err.hidden = false; return; }
   if (mode === 'taskissue' && text.length < 5) { err.textContent = 'Describe the problem.'; err.hidden = false; return; }
   const btn = $('noteSubmit'); btn.disabled = true;
   try {
@@ -773,6 +782,9 @@ async function submitNote() {
       else showToast('Sent back');
       btn.disabled = false;
       return;
+    } else if (mode === 'invalid') {
+      await db.invalidateIssue(id, text);
+      showToast('Marked not valid');
     } else if (mode === 'sendback') {
       await db.reviewIssue(id, false, text);
       showToast('Sent back to In progress');
@@ -1299,7 +1311,7 @@ async function handleAddStore() {
 let trendChart = null;
 
 function periodIssues() {
-  const base = state.issues.filter((i) => isActiveStore(state.byId.get(i.store_id)));
+  const base = state.issues.filter((i) => i.status !== 'not valid' && isActiveStore(state.byId.get(i.store_id)));
   if (state.reportPeriod === 'all') return base;
   const days = state.reportPeriod === 'week' ? 7 : 30;
   return base.filter((i) => daysSince(i.date) < days);
