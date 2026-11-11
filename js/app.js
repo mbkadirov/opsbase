@@ -32,7 +32,8 @@ const state = {
 const ROLE_LABEL = { admin: 'Admin', supervisor: 'Supervisor', crew_lead: 'Crew lead', pending: 'Pending', disabled: 'Disabled' };
 const STAFF = ['admin', 'supervisor', 'crew_lead'];
 const isAdmin = () => state.me?.role === 'admin';
-const canDelete = () => ['admin', 'supervisor'].includes(state.me?.role);
+// Admin deletes anything; a supervisor only issues they logged. Recap- and admin-logged issues are admin-only.
+const canDeleteIssue = (i) => state.me?.role === 'admin' || (state.me?.role === 'supervisor' && !!i.created_by && i.created_by === state.me?.id);
 const canSeeUsers = () => ['admin', 'supervisor'].includes(state.me?.role);
 
 const ACCOUNT_ORDER = ['Wegmans', 'Zara', 'Office Depot', 'Food Lion', 'Giant Food', 'Solidcore'];
@@ -601,7 +602,7 @@ function issueActions(i) {
   }
   if (i.status === 'resolved' && isAdmin()) a.push(`<button class="btn btn-sm" data-act="reopen" data-id="${i.id}">Reopen</button>`);
   if (i.status !== 'resolved' && !(i.status === 'pending review' && isAdmin())) a.push(`<button class="btn btn-sm icon" data-act="edit" data-id="${i.id}" aria-label="Edit issue"><i class="ti ti-pencil" aria-hidden="true"></i></button>`);
-  if (canDelete()) a.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
+  if (canDeleteIssue(i)) a.push(`<button class="btn btn-sm icon" data-act="delete" data-id="${i.id}" aria-label="Delete issue"><i class="ti ti-trash" aria-hidden="true"></i></button>`);
   return a.join('');
 }
 
@@ -1252,8 +1253,8 @@ async function commitPendingDelete() {
   try {
     await db.deleteIssue(p.id);
     state.issues = state.issues.filter((x) => x.id !== p.id);
-  } catch {
-    showToast("Couldn't delete. Try again.", { error: true });
+  } catch (e) {
+    showToast(/not allowed/.test(e?.message) ? 'Only an admin can delete this issue.' : "Couldn't delete. Try again.", { error: true });
   }
   rerender();
 }
