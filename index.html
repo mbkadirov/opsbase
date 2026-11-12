@@ -454,6 +454,18 @@
       <input type="password" id="accountPassword" autocomplete="new-password" minlength="8" placeholder="Leave blank to keep current">
     </div>
     <p class="field-error" id="accountError" hidden></p>
+    <div class="notify-box">
+      <h3 class="section-title">Notifications</h3>
+      <div class="notify-row">
+        <div><b>Phone pop-ups</b><span id="pushStatus">Checking…</span></div>
+        <button class="btn btn-sm" id="pushBtn" hidden>Turn on</button>
+      </div>
+      <div class="notify-row">
+        <div><b>Telegram</b><span id="tgStatus"></span></div>
+        <button class="btn btn-sm" id="tgBtn">Connect</button>
+      </div>
+      <p class="field-hint" id="notifyHint"></p>
+    </div>
     <button class="btn" id="manageUsersBtn" hidden><i class="ti ti-users" aria-hidden="true"></i>Manage users</button>
     <div class="sheet-actions">
       <button class="btn btn-ghost" id="signOutBtn">Sign out</button>

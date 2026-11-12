@@ -1,5 +1,6 @@
 import { db, auth } from './supabase.js';
 import { healthScore, issuePoints, daysSince, isOpen, band } from './health.js';
+import { pushState, turnOnPush, turnOffPush, telegramLink, telegramUnlink } from './notify.js';
 
 // ── STATE ─────────────────────────────────────────────────────────────
 const state = {
@@ -78,9 +79,12 @@ async function start(session) {
     renderAvatar();
     $('addStoreBtn').hidden = !isAdmin();
     await loadAll();
-    const want = new URLSearchParams(location.search).get('screen');
+    const params = new URLSearchParams(location.search);
+    const want = params.get('screen');
     if (want === 'log') resetLogForm();
-    switchScreen(['issues', 'log', 'reports'].includes(want) ? want : 'stores');
+    switchScreen(['issues', 'log', 'reports', 'tasks'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
+    if (params.get('issue')) openIssue(Number(params.get('issue')));
+    if (params.toString()) history.replaceState(null, '', location.pathname);
   } finally {
     state.starting = false;
   }
@@ -181,6 +185,8 @@ function bindAuthEvents() {
   $('saveAccountBtn').addEventListener('click', saveAccount);
   $('signOutBtn').addEventListener('click', async () => { closeSheet('accountSheet'); await auth.signOut().catch(() => {}); showSignedOut(); });
   $('manageUsersBtn').addEventListener('click', () => { closeSheet('accountSheet'); switchScreen('users'); });
+  $('pushBtn').addEventListener('click', togglePush);
+  $('tgBtn').addEventListener('click', toggleTelegram);
   $('usersBackBtn').addEventListener('click', () => switchScreen('stores'));
   $('assignCancel').addEventListener('click', () => closeSheet('assignSheet'));
   $('assignSave').addEventListener('click', saveAssignments);
@@ -215,7 +221,58 @@ function openAccount() {
   $('accountPassword').value = '';
   $('accountError').hidden = true;
   $('manageUsersBtn').hidden = !canSeeUsers();
+  renderNotifySettings();
   openSheet('accountSheet');
+}
+
+async function renderNotifySettings() {
+  const fresh = await db.myProfile(state.me.id).catch(() => null);
+  if (fresh) state.me = { ...state.me, ...fresh };
+  const st = await pushState().catch(() => 'unsupported');
+  const msg = {
+    on: 'On for this phone', off: 'Off for this phone', blocked: 'Blocked. Allow notifications for CSMD in your phone settings.',
+    'install-first': 'On iPhone, first add CSMD to your Home Screen (Share → Add to Home Screen), then open it from there.',
+    unsupported: 'This browser can’t show notifications.'
+  }[st];
+  $('pushStatus').textContent = msg;
+  $('pushBtn').hidden = !(st === 'on' || st === 'off');
+  $('pushBtn').textContent = st === 'on' ? 'Turn off' : 'Turn on';
+  $('pushBtn').dataset.state = st;
+  const linked = !!state.me.telegram_chat_id;
+  $('tgStatus').textContent = linked ? 'Connected' : 'Not connected';
+  $('tgBtn').textContent = linked ? 'Disconnect' : 'Connect';
+  $('notifyHint').textContent = '';
+}
+
+async function togglePush() {
+  const btn = $('pushBtn'); btn.disabled = true;
+  try {
+    if (btn.dataset.state === 'on') { await turnOffPush(); showToast('Phone pop-ups off'); }
+    else { await turnOnPush(state.me.id); showToast('Phone pop-ups on'); }
+  } catch (e) {
+    $('notifyHint').textContent = e.message === 'blocked'
+      ? 'Notifications were not allowed. Allow them for CSMD in your phone or browser settings.'
+      : /push_subscriptions/.test(e.message) ? 'The database needs the notifications update first.' : 'Couldn’t turn on notifications. Try again.';
+  }
+  btn.disabled = false;
+  renderNotifySettings();
+}
+
+async function toggleTelegram() {
+  const btn = $('tgBtn'); btn.disabled = true;
+  try {
+    if (state.me.telegram_chat_id) {
+      await telegramUnlink(); state.me.telegram_chat_id = null; showToast('Telegram disconnected');
+    } else {
+      const link = await telegramLink();
+      location.href = link;
+      $('notifyHint').textContent = 'Telegram opened. Tap Start there, then come back. It shows Connected next time you open this.';
+    }
+  } catch (e) {
+    $('notifyHint').textContent = e.message === 'bot' ? 'Telegram isn’t set up yet on the server.' : 'Couldn’t connect Telegram. Try again.';
+  }
+  btn.disabled = false;
+  if (state.me.telegram_chat_id === null) renderNotifySettings();
 }
 
 async function saveAccount() {
