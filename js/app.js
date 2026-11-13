@@ -315,9 +315,10 @@ async function renderUsers() {
         <div class="user-id"><div class="user-name">${esc(p.full_name || p.email)}</div><div class="user-email">${esc(p.email || '')}</div></div>
       </div>
       <div class="user-row">${roleCtl}
-        ${p.role === 'crew_lead' && isAdmin() ? `<button class="btn btn-sm" data-act="assign" data-id="${esc(p.id)}"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>` : ''}
+        ${(p.role === 'crew_lead' || p.role === 'supervisor') && isAdmin() ? `<button class="btn btn-sm" data-act="assign" data-id="${esc(p.id)}"><i class="ti ti-building-store" aria-hidden="true"></i>Stores</button>` : ''}
       </div>
       ${p.role === 'crew_lead' ? `<div class="user-stores">${stores.length ? `<b>${stores.length} store${stores.length === 1 ? '' : 's'}:</b> ${esc(stores.join(', '))}` : 'No stores assigned yet, so they see nothing.'}</div>` : ''}
+      ${p.role === 'supervisor' ? `<div class="user-stores">${stores.length ? `<b>Covers ${stores.length} store${stores.length === 1 ? '' : 's'}:</b> ${esc(stores.join(', '))}` : 'No stores set. They see all stores, but get no new-issue alerts and no store tasks from emails.'}</div>` : ''}
     </article>`;
   }).join('') || emptyHTML('No users yet');
 }
@@ -346,6 +347,9 @@ function openAssign(id) {
   state.assignUser = id;
   const mine = new Set(state.assignments.filter((a) => a.user_id === id).map((a) => a.store_id));
   $('assignTitle').textContent = `Stores for ${p.full_name || p.email}`;
+  $('assignSub').textContent = p.role === 'supervisor'
+    ? 'The stores this supervisor covers. They still see every store; these decide their new-issue alerts and which email tasks go to them.'
+    : 'Pick the stores this crew lead can see.';
   const stores = state.stores.filter((s) => isActiveStore(s) || mine.has(s.id))
     .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
   let last = '';
