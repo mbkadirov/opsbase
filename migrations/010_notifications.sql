@@ -68,7 +68,8 @@ begin
   select value into s from private.settings where key = 'notify_secret';
   if u is not null then
     perform net.http_post(url := u, body := jsonb_build_object('notification_id', nid),
-                          headers := jsonb_build_object('Content-Type', 'application/json', 'x-csmd-secret', s));
+                          headers := jsonb_build_object('Content-Type', 'application/json', 'x-csmd-secret', s),
+                          timeout_milliseconds := 30000);
   end if;
 exception when others then
   raise warning 'CSMD notify failed: %', sqlerrm;  -- never block saving an issue or task
