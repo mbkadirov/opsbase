@@ -417,7 +417,7 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 #scCalendar .page-title { white-space: nowrap; }
 .cal-head-actions { display: flex; gap: 6px; }
 .btn.icon { padding: 0; width: 36px; }
-.cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.cal-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap-reverse; }
 .cal-nav { display: flex; gap: 6px; }
 .cal-chips { padding-bottom: 0; }
 .cal-store { margin-bottom: 12px; }
@@ -475,3 +475,9 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .cal-grid.one-store .cal-lbl { white-space: normal; overflow-wrap: break-word; hyphens: auto; font-size: 10px; padding: 1px 2px; }
 .cal-grid.one-store .cal-cell { padding: 3px 2px; }
 @media (min-width: 520px) { .cal-grid.one-store .cal-lbl { font-size: 11px; } .cal-grid.one-store .cal-cell { min-height: 110px; } }
+
+.cal-day-head.bad { color: var(--bad); }
+.cal-store-head { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 0; font-size: 15px; color: var(--muted); }
+.cal-store-head b { color: var(--text); font-weight: 600; }
+.cal-store-head > span:first-child { flex: 1; min-width: 0; }
+.cal-store-count { font-size: 13px; }

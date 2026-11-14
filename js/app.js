@@ -28,7 +28,7 @@ const state = {
   tasks: [],
   taskLog: [],
   taskFilter: 'mine',
-  calView: 'month',
+  calView: 'day',
   calDay: null,
   calStore: 'all'
 };
@@ -1353,6 +1353,7 @@ function renderCalendar() {
   renderCalendarFilter();
   $('calViewChips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === state.calView));
   const day = state.calDay;
+  if (state.calView === 'day') { renderCalendarDay(day); return; }
   let from, to;
   if (state.calView === 'week') {
     from = weekStartOf(day); to = addDays(from, 6);
@@ -1411,7 +1412,7 @@ function calDayHTML(d, list, { compactEmpty = false } = {}) {
   return head + list.map(calItemHTML).join('');
 }
 
-function calItemHTML(it) {
+function calItemHTML(it, { hideStore = false, showDate = false } = {}) {
   const { t, kind } = it;
   const s = state.byId.get(t.store_id);
   const [kLabel, kCls] = CAL_KIND[kind];
@@ -1422,9 +1423,9 @@ function calItemHTML(it) {
     <div class="cal-item-main">
       <div class="task-title">${esc(t.title)}</div>
       <div class="task-meta">
-        ${kLabel ? `<span class="task-due ${kCls === 'bad' ? 'overdue' : kCls === 'warn' ? 'today' : ''}">${esc(kLabel)}</span>` : ''}
-        ${s ? `<span>${kLabel ? '· ' : ''}${esc(s.name)} ${esc(city(s))}</span>` : ''}
-        ${who ? `<span>· ${esc(who)}</span>` : ''}
+        ${kLabel ? `<span class="task-due ${kCls === 'bad' ? 'overdue' : kCls === 'warn' ? 'today' : ''}">${esc(kLabel)}${showDate ? ` · ${esc(fmtDate(it.date))}` : ''}</span>` : ''}
+        ${s && !hideStore ? `<span>${kLabel ? '· ' : ''}${esc(s.name)} ${esc(city(s))}</span>` : ''}
+        ${who ? `<span>${kLabel || (s && !hideStore) ? '· ' : ''}${esc(who)}</span>` : ''}
         ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
         ${it.l?.note ? `<span>· ${esc(it.l.note)}</span>` : ''}
       </div>
@@ -1438,7 +1439,8 @@ function calItemHTML(it) {
 
 function calStep(n) {
   const d = state.calDay || today();
-  if (state.calView === 'week') state.calDay = addDays(d, 7 * n);
+  if (state.calView === 'day') state.calDay = addDays(d, n);
+  else if (state.calView === 'week') state.calDay = addDays(d, 7 * n);
   else {
     const m = addMonths(d, n);
     const want = m.slice(0, 8) + d.slice(8);
@@ -1447,11 +1449,49 @@ function calStep(n) {
   renderCalendar();
 }
 
+// Tapping a day in the month grid opens that day.
 function calPickDay(d) {
-  const sameMonth = d.slice(0, 7) === (state.calDay || '').slice(0, 7);
   state.calDay = d;
+  state.calView = 'day';
   renderCalendar();
-  if (sameMonth && state.calView === 'month') $('calAgenda').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  window.scrollTo({ top: 0 });
+}
+
+// Day view (the default): anything overdue first, then the day's jobs grouped by store.
+function renderCalendarDay(day) {
+  const now = today();
+  const label = new Date(day + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  $('calTitle').textContent = day === now ? 'Today' : day === addDays(now, 1) ? 'Tomorrow' : day === addDays(now, -1) ? 'Yesterday' : label.split(',')[0];
+  const list = calItems(day, day);
+  const late = day === now ? calItems('2000-01-01', addDays(now, -1)).filter((it) => it.kind === 'overdue') : [];
+  const todo = list.filter((it) => it.kind !== 'done' && it.kind !== 'pending').length;
+  const done = list.length - todo;
+  $('calSub').textContent = `${day === now || day === addDays(now, 1) || day === addDays(now, -1) ? label + ' · ' : ''}${todo} job${todo === 1 ? '' : 's'}${late.length ? ` · ${late.length} overdue` : ''}${done ? ` · ${done} done` : ''}`;
+  $('calGrid').innerHTML = '';
+  $('calGrid').hidden = true;
+  let html = '';
+  if (late.length) {
+    html += `<div class="cal-day-head bad"><span>Overdue · ${late.length}</span></div>` + late.map((it) => calItemHTML(it, { showDate: true })).join('');
+  }
+  const add = isAdmin() ? `<button class="btn btn-sm icon" data-act="calnew" data-id="${day}" aria-label="Add a job on ${esc(label)}"><i class="ti ti-plus" aria-hidden="true"></i></button>` : '';
+  if (!list.length) {
+    html += `<div class="cal-day-head"><span>${late.length ? (day === now ? 'Today' : label) : ''}</span>${add}</div><p class="task-empty">No floor care jobs ${day === now ? 'today' : 'this day'}.</p>`;
+  } else {
+    const groups = new Map();
+    list.forEach((it) => { const k = it.t.store_id || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); });
+    const keys = [...groups.keys()].sort((a, b) => {
+      const sa = state.byId.get(a), sb = state.byId.get(b);
+      return (sa ? acctRank(sa.account) : 99) - (sb ? acctRank(sb.account) : 99) || (sa ? storeNum(sa) : 0) - (sb ? storeNum(sb) : 0);
+    });
+    keys.forEach((k, n) => {
+      const s = state.byId.get(k);
+      const g = groups.get(k);
+      const left = g.filter((it) => it.kind !== 'done' && it.kind !== 'pending').length;
+      html += `<div class="cal-store-head"><span><b>${esc(s ? s.name : 'No store')}</b>${s ? ` · ${esc(city(s))}` : ''}</span><span class="cal-store-count">${left ? `${left} to do` : 'All done'}</span>${n === 0 ? add : ''}</div>`
+        + g.map((it) => calItemHTML(it, { hideStore: true })).join('');
+    });
+  }
+  $('calAgenda').innerHTML = html;
 }
 
 // The store for a new task started from the calendar: the one being filtered on, if any.
