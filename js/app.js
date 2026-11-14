@@ -437,7 +437,7 @@ function bindEvents() {
   $('calNext').addEventListener('click', () => calStep(1));
   $('calToday').addEventListener('click', () => { state.calDay = today(); renderCalendar(); });
   $('calStore').addEventListener('change', (e) => { state.calStore = e.target.value; renderCalendar(); });
-  $('calNewBtn').addEventListener('click', () => openTaskSheet(null, null, { due: state.calDay || today(), storeId: calStoreForNew() }));
+  $('calNewBtn').addEventListener('click', () => openTaskSheet(null, null, { due: state.calDay || today(), storeId: calStoreForNew(), job: true }));
   $('calImportBtn').addEventListener('click', openImport);
   $('impCancel').addEventListener('click', () => closeSheet('importSheet'));
   $('impRead').addEventListener('click', readImport);
@@ -508,7 +508,7 @@ function bindEvents() {
     else if (act === 'logissue') openNote('taskissue', Number(id), logIssueText(Number(id)));
     else if (act === 'logfollow') followUpFromLog(Number(id));
     else if (act === 'calday') calPickDay(id);
-    else if (act === 'calnew') openTaskSheet(null, null, { due: id, storeId: calStoreForNew() });
+    else if (act === 'calnew') openTaskSheet(null, null, { due: id, storeId: calStoreForNew(), job: true });
   });
 }
 
@@ -561,6 +561,9 @@ function renderHeader() {
   const tb = $('taskBadge');
   tb.hidden = !mineDue;
   tb.textContent = String(mineDue);
+  const jobs = myJobsDue().length;
+  $('calBadge').hidden = !jobs;
+  $('calBadge').textContent = String(jobs);
 }
 
 function shownStores() {
@@ -926,7 +929,10 @@ const approvalQueue = () => state.issues.filter((i) => i.status === 'pending rev
 // Task completions by the team, waiting for an admin.
 const taskReviewQueue = () => state.taskLog.filter((l) => l.review === 'pending' && state.tasks.some((t) => t.id === l.task_id))
   .sort((a, b) => a.done_at.localeCompare(b.done_at));
-const myOpenTasks = () => state.tasks.filter((t) => t.status === 'open' && t.assignee_id === state.me?.id);
+// Floor care jobs live on the Calendar; everything else is a follow-up task on the Tasks tab.
+const isJob = (t) => t.source === 'calendar';
+const myOpenTasks = () => state.tasks.filter((t) => !isJob(t) && t.status === 'open' && t.assignee_id === state.me?.id);
+const myJobsDue = () => state.tasks.filter((t) => isJob(t) && t.status === 'open' && t.assignee_id === state.me?.id && t.due_date && t.due_date <= today());
 
 function dueInfo(t) {
   if (!t.due_date) return { text: 'No due date', cls: '' };
@@ -972,9 +978,9 @@ function renderTasks() {
   const list = $('taskList');
   let rows;
   if (state.taskFilter === 'done') rows = state.taskLog.length ? state.taskLog
-    : state.tasks.filter((t) => t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
+    : state.tasks.filter((t) => !isJob(t) && t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
       .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
-  else rows = state.tasks.filter((t) => (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
+  else rows = state.tasks.filter((t) => !isJob(t) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
     .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
   const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
   const approvals = state.taskFilter !== 'done' && isAdmin() ? approvalQueue() : [];
@@ -1083,7 +1089,7 @@ function followUpsHTML(issue) {
     </div>`;
 }
 
-let taskIssueId = null, taskEditId = null;
+let taskIssueId = null, taskEditId = null, taskIsJob = false;
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
 
@@ -1141,10 +1147,11 @@ function openTaskSheet(issueId, editId = null, opts = {}) {
   const i = state.issues.find((x) => x.id === (t ? t.issue_id : issueId));
   taskIssueId = i ? i.id : null;
   taskEditId = t ? t.id : null;
-  $('taskSheetTitle').textContent = t ? 'Edit task' : i ? 'Add follow-up' : 'New task';
-  $('taskSave').textContent = t ? 'Save' : i ? 'Add follow-up' : 'Add task';
+  taskIsJob = t ? isJob(t) : !!opts.job;
+  $('taskSheetTitle').textContent = t ? (taskIsJob ? 'Edit job' : 'Edit task') : i ? 'Add follow-up' : taskIsJob ? 'New floor care job' : 'New task';
+  $('taskSave').textContent = t ? 'Save' : i ? 'Add follow-up' : taskIsJob ? 'Add to calendar' : 'Add task';
   const s = i ? state.byId.get(i.store_id) : null;
-  $('taskSheetSub').textContent = i ? `${s?.name || i.store_id} · ${i.description.slice(0, 80)}${i.description.length > 80 ? '…' : ''}` : 'A task for one of your stores, one time or repeating.';
+  $('taskSheetSub').textContent = i ? `${s?.name || i.store_id} · ${i.description.slice(0, 80)}${i.description.length > 80 ? '…' : ''}` : (taskIsJob ? 'Shows on the Calendar. One time, or repeating for stores that do the same areas every month.' : 'A task for one of your stores, one time or repeating.');
   $('taskStoreField').hidden = !!i;
   if (!i) {
     const stores = state.stores.filter(isActiveStore);
@@ -1194,12 +1201,12 @@ async function saveTask() {
   const btn = $('taskSave'); btn.disabled = true;
   try {
     if (taskEditId) await db.updateTask(taskEditId, fields);
-    else await db.addTask({ ...fields, issue_id: taskIssueId, source: 'manual', created_by: state.me.id, created_by_name: state.me.full_name || state.me.email });
+    else await db.addTask({ ...fields, issue_id: taskIssueId, source: taskIsJob ? 'calendar' : 'manual', created_by: state.me.id, created_by_name: state.me.full_name || state.me.email });
     closeSheet('taskSheet');
-    showToast(taskEditId ? 'Task saved' : `${repeat === 'none' ? 'Task' : 'Repeating task'} added for ${p?.full_name || p?.email}`);
+    showToast(taskEditId ? 'Saved' : taskIsJob ? `Added to the calendar${repeat === 'none' ? '' : ', repeating'}` : `${repeat === 'none' ? 'Task' : 'Repeating task'} added for ${p?.full_name || p?.email}`);
     await refreshAfterChange(taskIssueId ?? -1);
   } catch (e) {
-    fail(/repeat|column/i.test(e.message) ? `The database needs an update first (migration ${repeat === 'monthly_nth' ? '012' : '006'}).` : friendlyDbError(e));
+    fail(/repeat|column|source|check constraint/i.test(e.message) ? `The database needs an update first (migration ${repeat === 'monthly_nth' || taskIsJob ? '012' : '006'}).` : friendlyDbError(e));
   }
   btn.disabled = false;
 }
@@ -1298,7 +1305,7 @@ function calItems(from, to) {
   const loggedDates = new Map();
   for (const l of state.taskLog) {
     const t = state.tasks.find((x) => x.id === l.task_id);
-    if (!t || !calVisible(t)) continue;
+    if (!t || !isJob(t) || !calVisible(t)) continue;
     const date = l.due_date || isoLocal(new Date(l.done_at));
     if (!loggedDates.has(t.id)) loggedDates.set(t.id, new Set());
     loggedDates.get(t.id).add(date);
@@ -1306,7 +1313,7 @@ function calItems(from, to) {
     out.push({ date, t, l, kind: l.review === 'pending' ? 'pending' : 'done' });
   }
   for (const t of state.tasks) {
-    if (!t.due_date || !calVisible(t)) continue;
+    if (!t.due_date || !isJob(t) || !calVisible(t)) continue;
     if (t.repeat === 'none') {
       if (t.due_date < from || t.due_date > to) continue;
       const kind = t.status === 'done' ? 'done' : t.status === 'pending review' ? 'pending' : t.due_date < now ? 'overdue' : t.due_date === now ? 'due' : 'upcoming';
@@ -1372,6 +1379,8 @@ function renderCalendar() {
     return;
   }
   $('calGrid').hidden = false;
+  const oneStore = !!calStoreForNew();
+  $('calGrid').classList.toggle('one-store', oneStore);
   const head = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((n) => `<div class="cal-dow">${n}</div>`).join('');
   let cells = '';
   for (let d = from; d <= to; d = addDays(d, 1)) {
@@ -1380,8 +1389,9 @@ function renderCalendar() {
     const todo = list.filter((it) => it.kind !== 'done' && it.kind !== 'pending');
     const bad = list.some((it) => it.kind === 'overdue');
     const allDone = list.length && !todo.length;
-    const labels = list.slice(0, 2).map((it) => `<span class="cal-lbl k-${it.kind}">${esc(it.t.title)}</span>`).join('');
-    const more = list.length > 2 ? `<span class="cal-more">+${list.length - 2}</span>` : '';
+    const max = oneStore ? 6 : 2;
+    const labels = list.slice(0, max).map((it) => `<span class="cal-lbl k-${it.kind}">${esc(it.t.title)}</span>`).join('');
+    const more = list.length > max ? `<span class="cal-more">+${list.length - max}</span>` : '';
     const count = list.length ? `<span class="cal-count ${bad ? 'bad' : allDone ? 'ok' : ''}">${allDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : todo.length}</span>` : '';
     cells += `<button class="cal-cell${other ? ' other' : ''}${d === today() ? ' today' : ''}${d === day ? ' sel' : ''}" data-act="calday" data-id="${d}"
       aria-label="${esc(fmtDate(d))}: ${list.length ? `${todo.length} to do, ${list.length - todo.length} done` : 'nothing'}">
@@ -1395,7 +1405,7 @@ const CAL_KIND = { overdue: ['Overdue', 'bad'], due: ['Due today', 'warn'], upco
 
 function calDayHTML(d, list, { compactEmpty = false } = {}) {
   const label = new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-  const add = isAdmin() ? `<button class="btn btn-sm icon" data-act="calnew" data-id="${d}" aria-label="Add a task on ${esc(label)}"><i class="ti ti-plus" aria-hidden="true"></i></button>` : '';
+  const add = isAdmin() ? `<button class="btn btn-sm icon" data-act="calnew" data-id="${d}" aria-label="Add a job on ${esc(label)}"><i class="ti ti-plus" aria-hidden="true"></i></button>` : '';
   const head = `<div class="cal-day-head${d === today() ? ' today' : ''}"><span>${esc(label)}${d === today() ? ' · Today' : ''}</span>${add}</div>`;
   if (!list.length) return head + (compactEmpty ? '' : '<p class="task-empty">Nothing scheduled.</p>');
   return head + list.map(calItemHTML).join('');
@@ -1416,7 +1426,6 @@ function calItemHTML(it) {
         ${s ? `<span>${kLabel ? '· ' : ''}${esc(s.name)} ${esc(city(s))}</span>` : ''}
         ${who ? `<span>· ${esc(who)}</span>` : ''}
         ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
-        ${t.source === 'calendar' ? '<span class="tag">Store calendar</span>' : ''}
         ${it.l?.note ? `<span>· ${esc(it.l.note)}</span>` : ''}
       </div>
     </div>
@@ -1576,11 +1585,7 @@ async function saveImport() {
     created_by: state.me.id, created_by_name: state.me.full_name || state.me.email };
   const btn = $('impSave'); btn.disabled = true;
   try {
-    try { await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'calendar' }))); }
-    catch (e) {
-      if (!/source|check constraint/i.test(e.message)) throw e;
-      await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'email' })));
-    }
+    await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'calendar' })));
     const monthName = MONTH_NAMES[Number(ym.slice(5, 7)) - 1];
     db.notifyCalendarImport(who, sid, rows.length, monthName).catch(() => { /* alert is optional */ });
     closeSheet('importSheet');
@@ -1589,7 +1594,7 @@ async function saveImport() {
     state.calDay = rows[0].date;
     await refreshAfterChange(-1);
     showToast(`${rows.length} task${rows.length === 1 ? '' : 's'} added to ${state.byId.get(sid)?.name || 'the store'}`);
-  } catch (e) { fail(friendlyDbError(e)); }
+  } catch (e) { fail(/source|check constraint/i.test(e.message) ? 'The database needs the calendar update first (migration 012).' : friendlyDbError(e)); }
   btn.disabled = false;
 }
 

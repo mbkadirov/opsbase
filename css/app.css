@@ -467,3 +467,11 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .imp-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
 .imp-row input[type=text] { min-height: 40px; font-size: 15px; }
 .imp-row.off input[type=text], .imp-row.off input[type=number] { opacity: .45; text-decoration: line-through; }
+
+/* One store picked: show the job names in every cell, wrapped, like the store's own sheet. */
+.cal-grid.one-store .cal-lbls { display: block; }
+.cal-grid.one-store .cal-count { display: none; }
+.cal-grid.one-store .cal-cell { min-height: 92px; }
+.cal-grid.one-store .cal-lbl { white-space: normal; overflow-wrap: break-word; hyphens: auto; font-size: 10px; padding: 1px 2px; }
+.cal-grid.one-store .cal-cell { padding: 3px 2px; }
+@media (min-width: 520px) { .cal-grid.one-store .cal-lbl { font-size: 11px; } .cal-grid.one-store .cal-cell { min-height: 110px; } }
