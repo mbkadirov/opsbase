@@ -381,12 +381,14 @@ async function saveAssignments() {
 async function loadAll() {
   if (!state.me) return;
   try {
-    const [stores, issues, tasks, taskLog, profiles] = await Promise.all([
+    const [stores, issues, tasks, taskLog, profiles, assignments] = await Promise.all([
       db.getStores(), db.getIssues(),
       db.getTasks().catch(() => []),
       db.getTaskLog().catch(() => []),
-      canSeeUsers() ? db.getProfiles().catch(() => []) : Promise.resolve([])
+      canSeeUsers() ? db.getProfiles().catch(() => []) : Promise.resolve([]),
+      db.getAssignments().catch(() => null)
     ]);
+    if (assignments) state.assignments = assignments;
     state.stores = stores;
     state.issues = issues;
     state.tasks = tasks;
@@ -1263,6 +1265,22 @@ function nextOccurrence(t, iso) {
   return d;
 }
 
+// Admins see every store. Everyone else sees the stores they are assigned to,
+// plus anything assigned to them. A supervisor with no stores set still sees all.
+function myStoreIds() {
+  if (isAdmin()) return null;
+  const mine = state.assignments.filter((a) => a.user_id === state.me?.id).map((a) => a.store_id);
+  if (!mine.length && state.me?.role === 'supervisor') return null;
+  return new Set(mine);
+}
+const calStores = () => { const mine = myStoreIds(); return state.stores.filter((s) => isActiveStore(s) && (!mine || mine.has(s.id))); };
+
+function calVisible(t) {
+  const mine = myStoreIds();
+  if (mine && t.assignee_id !== state.me?.id && !(t.store_id && mine.has(t.store_id))) return false;
+  return calStoreMatch(t.store_id);
+}
+
 function calStoreMatch(storeId) {
   const f = state.calStore;
   const s = storeId ? state.byId.get(storeId) : null;
@@ -1280,7 +1298,7 @@ function calItems(from, to) {
   const loggedDates = new Map();
   for (const l of state.taskLog) {
     const t = state.tasks.find((x) => x.id === l.task_id);
-    if (!t || !calStoreMatch(t.store_id)) continue;
+    if (!t || !calVisible(t)) continue;
     const date = l.due_date || isoLocal(new Date(l.done_at));
     if (!loggedDates.has(t.id)) loggedDates.set(t.id, new Set());
     loggedDates.get(t.id).add(date);
@@ -1288,7 +1306,7 @@ function calItems(from, to) {
     out.push({ date, t, l, kind: l.review === 'pending' ? 'pending' : 'done' });
   }
   for (const t of state.tasks) {
-    if (!t.due_date || !calStoreMatch(t.store_id)) continue;
+    if (!t.due_date || !calVisible(t)) continue;
     if (t.repeat === 'none') {
       if (t.due_date < from || t.due_date > to) continue;
       const kind = t.status === 'done' ? 'done' : t.status === 'pending review' ? 'pending' : t.due_date < now ? 'overdue' : t.due_date === now ? 'due' : 'upcoming';
@@ -1311,9 +1329,9 @@ function calItems(from, to) {
 
 function renderCalendarFilter() {
   const sel = $('calStore');
-  const accounts = [...new Set(state.stores.filter(isActiveStore).map((s) => s.account))].sort((a, b) => acctRank(a) - acctRank(b));
-  const stores = state.stores.filter(isActiveStore).sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
-  sel.innerHTML = '<option value="all">All stores</option>'
+  const stores = calStores().sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  const accounts = [...new Set(stores.map((s) => s.account))].sort((a, b) => acctRank(a) - acctRank(b));
+  sel.innerHTML = `<option value="all">${myStoreIds() ? 'All my stores' : 'All stores'}</option>`
     + accounts.map((a) => `<option value="acct:${esc(a)}">All ${esc(a)}</option>`).join('')
     + '<option value="none">Not tied to a store</option>'
     + accounts.map((a) => `<optgroup label="${esc(a)}">${stores.filter((s) => s.account === a).map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('')}</optgroup>`).join('');
@@ -1388,7 +1406,7 @@ function calItemHTML(it) {
   const s = state.byId.get(t.store_id);
   const [kLabel, kCls] = CAL_KIND[kind];
   // Only the task's current date can be finished; later repeats unlock once that one is done.
-  const canFinish = it.current && (t.assignee_id === state.me?.id || canSeeUsers());
+  const canFinish = it.current && (t.assignee_id === state.me?.id || canSeeUsers() || (state.me?.role === 'crew_lead' && !!s));
   const who = kind === 'done' || kind === 'pending' ? (it.l?.done_by_name || t.done_by_name || t.assignee_name) : t.assignee_name;
   return `<article class="cal-item k-${kind}">
     <div class="cal-item-main">
@@ -1563,6 +1581,8 @@ async function saveImport() {
       if (!/source|check constraint/i.test(e.message)) throw e;
       await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'email' })));
     }
+    const monthName = MONTH_NAMES[Number(ym.slice(5, 7)) - 1];
+    db.notifyCalendarImport(who, sid, rows.length, monthName).catch(() => { /* alert is optional */ });
     closeSheet('importSheet');
     state.calStore = sid;
     state.calView = 'month';
