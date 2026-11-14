@@ -27,7 +27,10 @@ const state = {
   assignUser: null,
   tasks: [],
   taskLog: [],
-  taskFilter: 'mine'
+  taskFilter: 'mine',
+  calView: 'month',
+  calDay: null,
+  calStore: 'all'
 };
 
 const ROLE_LABEL = { admin: 'Admin', supervisor: 'Supervisor', crew_lead: 'Crew lead', pending: 'Pending', disabled: 'Disabled' };
@@ -82,7 +85,7 @@ async function start(session) {
     const params = new URLSearchParams(location.search);
     const want = params.get('screen');
     if (want === 'log') resetLogForm();
-    switchScreen(['issues', 'log', 'reports', 'tasks'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
+    switchScreen(['issues', 'log', 'reports', 'tasks', 'calendar'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
     if (params.get('issue')) openIssue(Number(params.get('issue')));
     if (params.toString()) history.replaceState(null, '', location.pathname);
   } finally {
@@ -425,6 +428,21 @@ function bindEvents() {
   $('taskSave').addEventListener('click', saveTask);
   $('newTaskBtn').addEventListener('click', () => openTaskSheet(null));
   $('taskRepeat').addEventListener('change', syncRepeatFields);
+  $('taskNthWeek').addEventListener('change', syncRepeatFields);
+  $('taskNthDay').addEventListener('change', syncRepeatFields);
+  chipGroup('calViewChips', (v) => { state.calView = v; renderCalendar(); });
+  $('calPrev').addEventListener('click', () => calStep(-1));
+  $('calNext').addEventListener('click', () => calStep(1));
+  $('calToday').addEventListener('click', () => { state.calDay = today(); renderCalendar(); });
+  $('calStore').addEventListener('change', (e) => { state.calStore = e.target.value; renderCalendar(); });
+  $('calNewBtn').addEventListener('click', () => openTaskSheet(null, null, { due: state.calDay || today(), storeId: calStoreForNew() }));
+  $('calImportBtn').addEventListener('click', openImport);
+  $('impCancel').addEventListener('click', () => closeSheet('importSheet'));
+  $('impRead').addEventListener('click', readImport);
+  $('impSave').addEventListener('click', saveImport);
+  $('impStore').addEventListener('change', pickImportAssignee);
+  $('impRows').addEventListener('input', onImportEdit);
+  $('impRows').addEventListener('change', onImportEdit);
   $('taskDue').addEventListener('change', syncRepeatFields);
   $('taskUntil').addEventListener('change', syncRepeatFields);
   $('taskDays').addEventListener('click', (e) => {
@@ -487,6 +505,8 @@ function bindEvents() {
     else if (act === 'logsendback') openNote('tasksendback', Number(id));
     else if (act === 'logissue') openNote('taskissue', Number(id), logIssueText(Number(id)));
     else if (act === 'logfollow') followUpFromLog(Number(id));
+    else if (act === 'calday') calPickDay(id);
+    else if (act === 'calnew') openTaskSheet(null, null, { due: id, storeId: calStoreForNew() });
   });
 }
 
@@ -500,7 +520,7 @@ function chipGroup(id, onPick) {
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
-const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks' };
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks', calendar: 'scCalendar' };
 function switchScreen(name) {
   state.screen = name;
   Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
@@ -513,6 +533,7 @@ function switchScreen(name) {
   else if (name === 'reports') renderReports();
   else if (name === 'users') renderUsers();
   else if (name === 'tasks') renderTasks();
+  else if (name === 'calendar') renderCalendar();
   window.scrollTo({ top: 0 });
 }
 
@@ -523,6 +544,7 @@ function rerender() {
   else if (state.screen === 'detail') renderDetail();
   else if (state.screen === 'reports') renderReports();
   else if (state.screen === 'tasks') renderTasks();
+  else if (state.screen === 'calendar') renderCalendar();
 }
 
 // ── HEADER & ACCOUNT CONTROLS ─────────────────────────────────────────
@@ -1072,7 +1094,27 @@ function repeatText(t) {
     return `Every ${label}${until}`;
   }
   if (t.repeat === 'monthly') return `Monthly on the ${ordinal(t.repeat_days?.[0] || Number((t.due_date || today()).slice(8)))}${until}`;
+  if (t.repeat === 'monthly_nth') return `Every ${WEEK_WORDS[t.repeat_days?.[0]] || ''} ${DAY_NAMES[t.repeat_days?.[1]] || ''} of the month${until}`;
   return '';
+}
+
+function repeatDaysFor(r, due) {
+  if (r === 'weekly') return pickedDays();
+  if (r === 'monthly') return [Number(due.slice(8))];
+  if (r === 'monthly_nth') return [Number($('taskNthWeek').value), Number($('taskNthDay').value)];
+  return null;
+}
+
+// Start date → the first date the task really comes due on its pattern.
+function firstDue(r, due, days) {
+  if (r === 'weekly' && !days.includes(dowOf(due))) {
+    for (let k = 1; k <= 7; k++) { const d = addDays(due, k); if (days.includes(dowOf(d))) return d; }
+  }
+  if (r === 'monthly_nth') {
+    const x = nthWeekday(due, days[0], days[1]);
+    return x >= due ? x : nthWeekday(addMonths(due, 1), days[0], days[1]);
+  }
+  return due;
 }
 
 function pickedDays() { return [...$('taskDays').querySelectorAll('.on')].map((b) => Number(b.dataset.d)); }
@@ -1080,13 +1122,14 @@ function pickedDays() { return [...$('taskDays').querySelectorAll('.on')].map((b
 function syncRepeatFields() {
   const r = $('taskRepeat').value;
   $('taskDaysField').hidden = r !== 'weekly';
+  $('taskNthField').hidden = r !== 'monthly_nth';
   $('taskUntilField').hidden = r === 'none';
   $('taskDueLabel').textContent = r === 'none' ? 'Due' : 'Starts';
   const due = $('taskDue').value || today();
   if (r === 'weekly' && !pickedDays().length) {
     const b = $('taskDays').querySelector(`[data-d="${new Date(due + 'T00:00:00').getDay()}"]`); b && b.classList.add('on');
   }
-  const preview = { repeat: r, repeat_days: r === 'weekly' ? pickedDays() : r === 'monthly' ? [Number(due.slice(8))] : null, repeat_until: $('taskUntil').value || null, due_date: due };
+  const preview = { repeat: r, repeat_days: repeatDaysFor(r, due), repeat_until: $('taskUntil').value || null, due_date: due };
   $('taskRepeatHint').textContent = r === 'none' ? '' : repeatText(preview) + (preview.repeat_until ? '' : ' (no end date)');
 }
 
@@ -1112,7 +1155,10 @@ function openTaskSheet(issueId, editId = null, opts = {}) {
   $('taskAssignee').innerHTML = staff.map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email)} · ${esc(ROLE_LABEL[p.role])}</option>`).join('')
     || '<option value="">No team members yet</option>';
   if (t?.assignee_id) $('taskAssignee').value = t.assignee_id;
-  $('taskDue').value = t?.due_date || (i ? addDays(today(), 1) : today());
+  $('taskDue').value = t?.due_date || opts.due || (i ? addDays(today(), 1) : today());
+  const dueNow = $('taskDue').value;
+  $('taskNthWeek').value = String(t?.repeat === 'monthly_nth' ? t.repeat_days[0] : nthOf(dueNow));
+  $('taskNthDay').value = String(t?.repeat === 'monthly_nth' ? t.repeat_days[1] : dowOf(dueNow));
   $('taskRepeat').value = t?.repeat || 'none';
   $('taskUntil').value = t?.repeat_until || '';
   $('taskDays').querySelectorAll('[data-d]').forEach((b) => b.classList.toggle('on', t?.repeat === 'weekly' && (t.repeat_days || []).includes(Number(b.dataset.d))));
@@ -1128,16 +1174,14 @@ async function saveTask() {
   const repeat = $('taskRepeat').value;
   const due = $('taskDue').value || today();
   const until = repeat === 'none' ? null : $('taskUntil').value || null;
-  const days = repeat === 'weekly' ? pickedDays() : repeat === 'monthly' ? [Number(due.slice(8))] : null;
+  const days = repeatDaysFor(repeat, due);
   const fail = (m) => { err.textContent = m; err.hidden = false; };
   if (title.length < 3) return fail('Say what needs to happen.');
   if (!who) return fail('Pick who it is for. Team members appear here once they have a role.');
   if (repeat === 'weekly' && !days.length) return fail('Pick at least one day.');
   if (until && until < due) return fail('The end date is before the start date.');
-  let first = due;
-  if (repeat === 'weekly' && !days.includes(new Date(due + 'T00:00:00').getDay())) {
-    for (let k = 1; k <= 7; k++) { const d = addDays(due, k); if (days.includes(new Date(d + 'T00:00:00').getDay())) { first = d; break; } }
-  }
+  const first = firstDue(repeat, due, days);
+  if (until && first > until) return fail('With this pattern the first date is after the end date.');
   const p = state.profiles.find((x) => x.id === who);
   const i = state.issues.find((x) => x.id === taskIssueId);
   const fields = {
@@ -1153,7 +1197,7 @@ async function saveTask() {
     showToast(taskEditId ? 'Task saved' : `${repeat === 'none' ? 'Task' : 'Repeating task'} added for ${p?.full_name || p?.email}`);
     await refreshAfterChange(taskIssueId ?? -1);
   } catch (e) {
-    fail(/repeat|column/i.test(e.message) ? 'The database needs the repeating-tasks update first (migration 006).' : friendlyDbError(e));
+    fail(/repeat|column/i.test(e.message) ? `The database needs an update first (migration ${repeat === 'monthly_nth' ? '012' : '006'}).` : friendlyDbError(e));
   }
   btn.disabled = false;
 }
@@ -1170,6 +1214,363 @@ async function deleteTask(id) {
     showToast('Task deleted');
     await refreshAfterChange(t?.issue_id ?? -1);
   } catch (e) { showToast(friendlyDbError(e), { error: true }); }
+}
+
+// ── CALENDAR ──────────────────────────────────────────────────────────
+// Every store's tasks by day: one-time tasks on their due date, repeating tasks on every
+// date they come due, and finished ones from the done log.
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEK_WORDS = ['', '1st', '2nd', '3rd', '4th', 'last'];
+const dowOf = (iso) => new Date(iso + 'T00:00:00').getDay();
+const monthStart = (iso) => iso.slice(0, 8) + '01';
+const monthEnd = (iso) => { const [y, m] = iso.split('-').map(Number); return isoLocal(new Date(y, m, 0)); };
+const addMonths = (iso, n) => { const [y, m] = iso.split('-').map(Number); return isoLocal(new Date(y, m - 1 + n, 1)); };
+const weekStartOf = (iso) => addDays(iso, -((dowOf(iso) + 6) % 7)); // weeks start Monday
+
+// The Nth (1–4) or last (5) weekday of the month containing iso.
+function nthWeekday(iso, wk, dow) {
+  const first = monthStart(iso), last = monthEnd(iso);
+  if (wk >= 5) return addDays(last, -((dowOf(last) - dow + 7) % 7));
+  return addDays(first, ((dow - dowOf(first) + 7) % 7) + (wk - 1) * 7);
+}
+const nthOf = (iso) => { const d = Number(iso.slice(8)); return addDays(iso, 7) > monthEnd(iso) && d > 28 ? 5 : Math.ceil(d / 7); };
+
+// The next date a repeating task comes due strictly after iso (matches task_next_due in the database).
+function nextOccurrence(t, iso) {
+  let d = null;
+  if (t.repeat === 'daily') d = addDays(iso, 1);
+  else if (t.repeat === 'weekly') {
+    const days = t.repeat_days || [];
+    if (!days.length) return null;
+    for (let k = 1; k <= 7; k++) { const x = addDays(iso, k); if (days.includes(dowOf(x))) { d = x; break; } }
+  } else if (t.repeat === 'monthly') {
+    const dom = t.repeat_days?.[0] || Number((t.due_date || iso).slice(8));
+    let m = monthStart(iso);
+    for (let k = 0; k < 13; k++) {
+      const end = monthEnd(m);
+      const x = m.slice(0, 8) + String(dom).padStart(2, '0');
+      const pick = x > end ? end : x;
+      if (pick > iso) { d = pick; break; }
+      m = addMonths(m, 1);
+    }
+  } else if (t.repeat === 'monthly_nth') {
+    const [wk, dow] = t.repeat_days || [];
+    if (!wk && wk !== 0) return null;
+    let m = monthStart(iso);
+    for (let k = 0; k < 13; k++) { const x = nthWeekday(m, wk, dow); if (x > iso) { d = x; break; } m = addMonths(m, 1); }
+  }
+  if (!d || (t.repeat_until && d > t.repeat_until)) return null;
+  return d;
+}
+
+function calStoreMatch(storeId) {
+  const f = state.calStore;
+  const s = storeId ? state.byId.get(storeId) : null;
+  if (f === 'all') return !s || isActiveStore(s) || state.showInactive;
+  if (f === 'none') return !storeId;
+  if (f.startsWith('acct:')) return !!s && s.account === f.slice(5);
+  return storeId === f;
+}
+
+// Everything on the calendar between two dates, inclusive.
+// kind: overdue | due | upcoming | pending | done
+function calItems(from, to) {
+  const out = [];
+  const now = today();
+  const loggedDates = new Map();
+  for (const l of state.taskLog) {
+    const t = state.tasks.find((x) => x.id === l.task_id);
+    if (!t || !calStoreMatch(t.store_id)) continue;
+    const date = l.due_date || isoLocal(new Date(l.done_at));
+    if (!loggedDates.has(t.id)) loggedDates.set(t.id, new Set());
+    loggedDates.get(t.id).add(date);
+    if (t.repeat === 'none' || date < from || date > to) continue;
+    out.push({ date, t, l, kind: l.review === 'pending' ? 'pending' : 'done' });
+  }
+  for (const t of state.tasks) {
+    if (!t.due_date || !calStoreMatch(t.store_id)) continue;
+    if (t.repeat === 'none') {
+      if (t.due_date < from || t.due_date > to) continue;
+      const kind = t.status === 'done' ? 'done' : t.status === 'pending review' ? 'pending' : t.due_date < now ? 'overdue' : t.due_date === now ? 'due' : 'upcoming';
+      out.push({ date: t.due_date, t, kind, current: t.status === 'open' });
+      continue;
+    }
+    if (t.status !== 'open') continue;
+    let d = t.due_date, guard = 0;
+    while (d && d <= to && guard++ < 400) {
+      if (d >= from && !(d !== t.due_date && loggedDates.get(t.id)?.has(d))) {
+        const current = d === t.due_date;
+        out.push({ date: d, t, current, kind: d < now && current ? 'overdue' : d === now && current ? 'due' : 'upcoming' });
+      }
+      d = nextOccurrence(t, d);
+    }
+  }
+  const rank = { overdue: 0, due: 1, upcoming: 2, pending: 3, done: 4 };
+  return out.sort((a, b) => a.date.localeCompare(b.date) || rank[a.kind] - rank[b.kind] || a.t.title.localeCompare(b.t.title));
+}
+
+function renderCalendarFilter() {
+  const sel = $('calStore');
+  const accounts = [...new Set(state.stores.filter(isActiveStore).map((s) => s.account))].sort((a, b) => acctRank(a) - acctRank(b));
+  const stores = state.stores.filter(isActiveStore).sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  sel.innerHTML = '<option value="all">All stores</option>'
+    + accounts.map((a) => `<option value="acct:${esc(a)}">All ${esc(a)}</option>`).join('')
+    + '<option value="none">Not tied to a store</option>'
+    + accounts.map((a) => `<optgroup label="${esc(a)}">${stores.filter((s) => s.account === a).map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('')}</optgroup>`).join('');
+  sel.value = [...sel.options].some((o) => o.value === state.calStore) ? state.calStore : 'all';
+  state.calStore = sel.value;
+}
+
+function renderCalendar() {
+  if (!state.calDay) state.calDay = today();
+  $('calNewBtn').hidden = !isAdmin();
+  $('calImportBtn').hidden = !isAdmin();
+  renderCalendarFilter();
+  $('calViewChips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === state.calView));
+  const day = state.calDay;
+  let from, to;
+  if (state.calView === 'week') {
+    from = weekStartOf(day); to = addDays(from, 6);
+    const sameMonth = from.slice(5, 7) === to.slice(5, 7);
+    $('calTitle').textContent = `${fmtDate(from)} – ${sameMonth ? Number(to.slice(8)) : fmtDate(to)}`;
+  } else {
+    from = weekStartOf(monthStart(day)); to = addDays(weekStartOf(monthEnd(day)), 6);
+    $('calTitle').textContent = `${MONTH_NAMES[Number(day.slice(5, 7)) - 1]} ${day.slice(0, 4)}`;
+  }
+  const items = calItems(from, to);
+  const byDate = new Map();
+  items.forEach((it) => { if (!byDate.has(it.date)) byDate.set(it.date, []); byDate.get(it.date).push(it); });
+  const inMonth = state.calView === 'week' ? items : items.filter((it) => it.date.slice(0, 7) === day.slice(0, 7));
+  const late = inMonth.filter((it) => it.kind === 'overdue').length;
+  const open = inMonth.filter((it) => it.kind === 'due' || it.kind === 'upcoming' || it.kind === 'overdue').length;
+  const done = inMonth.filter((it) => it.kind === 'done').length;
+  $('calSub').textContent = `${open} to do${late ? ` · ${late} overdue` : ''}${done ? ` · ${done} done` : ''}`;
+
+  if (state.calView === 'week') {
+    const days = Array.from({ length: 7 }, (_, k) => addDays(from, k));
+    $('calGrid').innerHTML = '';
+    $('calGrid').hidden = true;
+    $('calAgenda').innerHTML = days.map((d) => calDayHTML(d, byDate.get(d) || [], { compactEmpty: true })).join('');
+    return;
+  }
+  $('calGrid').hidden = false;
+  const head = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((n) => `<div class="cal-dow">${n}</div>`).join('');
+  let cells = '';
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const list = byDate.get(d) || [];
+    const other = d.slice(0, 7) !== day.slice(0, 7);
+    const todo = list.filter((it) => it.kind !== 'done' && it.kind !== 'pending');
+    const bad = list.some((it) => it.kind === 'overdue');
+    const allDone = list.length && !todo.length;
+    const labels = list.slice(0, 2).map((it) => `<span class="cal-lbl k-${it.kind}">${esc(it.t.title)}</span>`).join('');
+    const more = list.length > 2 ? `<span class="cal-more">+${list.length - 2}</span>` : '';
+    const count = list.length ? `<span class="cal-count ${bad ? 'bad' : allDone ? 'ok' : ''}">${allDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : todo.length}</span>` : '';
+    cells += `<button class="cal-cell${other ? ' other' : ''}${d === today() ? ' today' : ''}${d === day ? ' sel' : ''}" data-act="calday" data-id="${d}"
+      aria-label="${esc(fmtDate(d))}: ${list.length ? `${todo.length} to do, ${list.length - todo.length} done` : 'nothing'}">
+      <span class="cal-num">${Number(d.slice(8))}</span>${count}<span class="cal-lbls">${labels}${more}</span></button>`;
+  }
+  $('calGrid').innerHTML = head + cells;
+  $('calAgenda').innerHTML = calDayHTML(day, byDate.get(day) || []);
+}
+
+const CAL_KIND = { overdue: ['Overdue', 'bad'], due: ['Due today', 'warn'], upcoming: ['', ''], pending: ['Waiting for approval', 'warn'], done: ['Done', 'ok'] };
+
+function calDayHTML(d, list, { compactEmpty = false } = {}) {
+  const label = new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  const add = isAdmin() ? `<button class="btn btn-sm icon" data-act="calnew" data-id="${d}" aria-label="Add a task on ${esc(label)}"><i class="ti ti-plus" aria-hidden="true"></i></button>` : '';
+  const head = `<div class="cal-day-head${d === today() ? ' today' : ''}"><span>${esc(label)}${d === today() ? ' · Today' : ''}</span>${add}</div>`;
+  if (!list.length) return head + (compactEmpty ? '' : '<p class="task-empty">Nothing scheduled.</p>');
+  return head + list.map(calItemHTML).join('');
+}
+
+function calItemHTML(it) {
+  const { t, kind } = it;
+  const s = state.byId.get(t.store_id);
+  const [kLabel, kCls] = CAL_KIND[kind];
+  // Only the task's current date can be finished; later repeats unlock once that one is done.
+  const canFinish = it.current && (t.assignee_id === state.me?.id || canSeeUsers());
+  const who = kind === 'done' || kind === 'pending' ? (it.l?.done_by_name || t.done_by_name || t.assignee_name) : t.assignee_name;
+  return `<article class="cal-item k-${kind}">
+    <div class="cal-item-main">
+      <div class="task-title">${esc(t.title)}</div>
+      <div class="task-meta">
+        ${kLabel ? `<span class="task-due ${kCls === 'bad' ? 'overdue' : kCls === 'warn' ? 'today' : ''}">${esc(kLabel)}</span>` : ''}
+        ${s ? `<span>${kLabel ? '· ' : ''}${esc(s.name)} ${esc(city(s))}</span>` : ''}
+        ${who ? `<span>· ${esc(who)}</span>` : ''}
+        ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
+        ${t.source === 'calendar' ? '<span class="tag">Store calendar</span>' : ''}
+        ${it.l?.note ? `<span>· ${esc(it.l.note)}</span>` : ''}
+      </div>
+    </div>
+    <div class="task-actions">
+      ${canFinish ? `<button class="btn btn-sm resolve" data-act="taskdone" data-id="${t.id}"><i class="ti ti-check" aria-hidden="true"></i>Done</button>` : ''}
+      ${isAdmin() && kind !== 'done' ? `<button class="btn btn-sm icon" data-act="taskedit" data-id="${t.id}" aria-label="Edit task"><i class="ti ti-pencil" aria-hidden="true"></i></button>` : ''}
+    </div>
+  </article>`;
+}
+
+function calStep(n) {
+  const d = state.calDay || today();
+  if (state.calView === 'week') state.calDay = addDays(d, 7 * n);
+  else {
+    const m = addMonths(d, n);
+    const want = m.slice(0, 8) + d.slice(8);
+    state.calDay = want > monthEnd(m) ? monthEnd(m) : want;
+  }
+  renderCalendar();
+}
+
+function calPickDay(d) {
+  const sameMonth = d.slice(0, 7) === (state.calDay || '').slice(0, 7);
+  state.calDay = d;
+  renderCalendar();
+  if (sameMonth && state.calView === 'month') $('calAgenda').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// The store for a new task started from the calendar: the one being filtered on, if any.
+const calStoreForNew = () => (state.calStore && !state.calStore.startsWith('acct:') && !['all', 'none'].includes(state.calStore) ? state.calStore : '');
+
+// ── IMPORT A STORE'S MONTHLY CALENDAR ─────────────────────────────────
+// Stores like Allentown #79 email a month grid: a day number, then the areas for that day.
+// Lines next to each other belong together; a blank line starts a new task.
+function parseMonthCalendar(text, ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const days = new Date(y, m, 0).getDate();
+  const WEEKDAY = /^(sun|mon|tue|tues|wed|wednes|thu|thur|thurs|fri|sat|satur)(day)?\.?$/i;
+  const STOP = /^(thank you|thanks|regards|best regards|sincerely|sent from)/i;
+  const out = [];
+  let day = 0, buf = [];
+  const flush = () => {
+    const title = buf.reduce((acc, x) => (acc && !/\/$/.test(acc) ? `${acc} ${x}` : acc + x), '').replace(/\s+/g, ' ').replace(/\s+([&/])\s*$/, '').trim();
+    const date = `${ym}-${String(day).padStart(2, '0')}`;
+    // Store hours notes and days already past start unchecked.
+    if (day && title) out.push({ date, title: tidyTitle(title), keep: date >= today() && !/^store (opens|closes|closed|open)\b/i.test(title) });
+    buf = [];
+  };
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const cells = raw.includes('\t') ? raw.split('\t') : [raw];
+    for (const c of cells) {
+      const l = c.replace(/\[[^\]]*\]/g, '').replace(/ |﻿/g, ' ').trim();
+      if (!l) { flush(); continue; }
+      if (STOP.test(l)) { flush(); return out; }
+      if (WEEKDAY.test(l)) { flush(); continue; }
+      const n = l.match(/^(\d{1,2})(?:[.):\-]?\s+(.+))?$/);
+      if (n && Number(n[1]) >= 1 && Number(n[1]) <= days && Number(n[1]) > day) {
+        flush(); day = Number(n[1]);
+        if (n[2]) buf.push(n[2]);
+        continue;
+      }
+      if (day) {
+        // "Seafood Cooler &" + "Seafood/Prepared Freezer" → one task
+        buf.push(l);
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
+// SHOUTING CAPS → Normal case, keeping short codes like "IVR".
+function tidyTitle(s) {
+  const letters = s.replace(/[^A-Za-z]/g, '');
+  if (letters.length < 4 || letters !== letters.toUpperCase()) return s;
+  return s.toLowerCase().replace(/(^|[\s/&(-])([a-z])/g, (_, p, c) => p + c.toUpperCase());
+}
+
+let importRows = [];
+
+async function openImport() {
+  const stores = state.stores.filter(isActiveStore).sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  $('impStore').innerHTML = '<option value="">Pick a store</option>' + stores.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('');
+  $('impStore').value = calStoreForNew();
+  const now = today();
+  $('impMonth').value = (Number(now.slice(8)) >= 20 ? addMonths(now, 1) : now).slice(0, 7);
+  const staff = state.profiles.filter((p) => STAFF.includes(p.role)).sort((a, b) => String(a.full_name || a.email).localeCompare(String(b.full_name || b.email)));
+  $('impWho').innerHTML = staff.map((p) => `<option value="${esc(p.id)}">${esc(p.full_name || p.email)} · ${esc(ROLE_LABEL[p.role])}</option>`).join('') || '<option value="">No team members yet</option>';
+  $('impText').value = '';
+  importRows = [];
+  renderImportRows();
+  $('impError').hidden = true;
+  openSheet('importSheet');
+  if (!state.assignments.length) { try { state.assignments = await db.getAssignments(); } catch { /* optional */ } }
+  pickImportAssignee();
+}
+
+// Default "Who" to the supervisor who covers the store.
+function pickImportAssignee() {
+  const sid = $('impStore').value;
+  const sup = state.assignments.map((a) => a.store_id === sid && state.profiles.find((p) => p.id === a.user_id && p.role === 'supervisor')).find(Boolean);
+  if (sup) $('impWho').value = sup.id;
+}
+
+function readImport() {
+  const ym = $('impMonth').value;
+  if (!ym) { $('impError').textContent = 'Pick the month.'; $('impError').hidden = false; return; }
+  importRows = parseMonthCalendar($('impText').value, ym);
+  $('impError').hidden = !!importRows.length || !$('impText').value.trim();
+  if (!importRows.length && $('impText').value.trim()) $('impError').textContent = "Couldn't find any days. Paste the calendar part of the email, starting at day 1.";
+  renderImportRows();
+}
+
+function renderImportRows() {
+  const box = $('impRows');
+  const n = importRows.filter((r) => r.keep).length;
+  $('impSave').textContent = n ? `Add ${n} task${n === 1 ? '' : 's'}` : 'Add tasks';
+  $('impSave').disabled = !n;
+  if (!importRows.length) { box.innerHTML = ''; box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="field-label">Check the list. Uncheck or fix any line before adding.</div><div class="imp-row imp-head"><span></span><span>Day</span><span>Task</span></div>` + importRows.map((r, k) => `
+    <div class="imp-row${r.keep ? '' : ' off'}">
+      <input type="checkbox" data-imp="keep" data-k="${k}" ${r.keep ? 'checked' : ''} aria-label="Add this one">
+      <input type="number" inputmode="numeric" min="1" max="31" data-imp="day" data-k="${k}" value="${Number(r.date.slice(8))}" aria-label="Day of the month">
+      <input type="text" data-imp="title" data-k="${k}" value="${esc(r.title)}" aria-label="Task">
+    </div>`).join('');
+}
+
+function onImportEdit(e) {
+  const el = e.target.closest('[data-imp]'); if (!el) return;
+  const r = importRows[Number(el.dataset.k)]; if (!r) return;
+  if (el.dataset.imp === 'keep') { r.keep = el.checked; el.closest('.imp-row').classList.toggle('off', !r.keep); renderImportRowsCount(); }
+  else if (el.dataset.imp === 'day') r.date = `${r.date.slice(0, 8)}${String(Math.max(1, Math.min(31, Number(el.value) || 1))).padStart(2, '0')}`;
+  else r[el.dataset.imp] = el.value;
+}
+function renderImportRowsCount() {
+  const n = importRows.filter((r) => r.keep).length;
+  $('impSave').textContent = n ? `Add ${n} task${n === 1 ? '' : 's'}` : 'Add tasks';
+  $('impSave').disabled = !n;
+}
+
+async function saveImport() {
+  const err = $('impError');
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  const sid = $('impStore').value, who = $('impWho').value;
+  if (!sid) return fail('Pick the store this calendar is for.');
+  if (!who) return fail('Pick who does these.');
+  const p = state.profiles.find((x) => x.id === who);
+  const have = new Set(state.tasks.filter((t) => t.store_id === sid).map((t) => `${t.due_date}|${t.title.toLowerCase()}`));
+  const ym = $('impMonth').value;
+  if (!ym) return fail('Pick the month.');
+  importRows.forEach((r) => { r.date = ym + r.date.slice(7); });
+  const rows = importRows.filter((r) => r.keep && r.title.trim().length >= 2 && r.date <= monthEnd(ym + '-01'))
+    .filter((r) => !have.has(`${r.date}|${r.title.trim().toLowerCase()}`));
+  if (!rows.length) return fail('These are already on the calendar.');
+  const base = { store_id: sid, assignee_id: who, assignee_name: p?.full_name || p?.email || '', repeat: 'none', repeat_days: null, repeat_until: null,
+    created_by: state.me.id, created_by_name: state.me.full_name || state.me.email };
+  const btn = $('impSave'); btn.disabled = true;
+  try {
+    try { await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'calendar' }))); }
+    catch (e) {
+      if (!/source|check constraint/i.test(e.message)) throw e;
+      await db.addTask(rows.map((r) => ({ ...base, title: r.title.trim(), due_date: r.date, source: 'email' })));
+    }
+    closeSheet('importSheet');
+    state.calStore = sid;
+    state.calView = 'month';
+    state.calDay = rows[0].date;
+    await refreshAfterChange(-1);
+    showToast(`${rows.length} task${rows.length === 1 ? '' : 's'} added to ${state.byId.get(sid)?.name || 'the store'}`);
+  } catch (e) { fail(friendlyDbError(e)); }
+  btn.disabled = false;
 }
 
 // ── STORE DETAIL ──────────────────────────────────────────────────────
