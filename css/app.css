@@ -536,3 +536,5 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .store-loc > div:first-child { display: grid; font-size: 14px; }
 .store-loc span { font-size: 13px; color: var(--muted); }
 .store-loc-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.audit-start-store { font-size: 17px; font-weight: 600; margin: 4px 0 8px; }
+#detailAudits { margin-bottom: 8px; }

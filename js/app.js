@@ -86,7 +86,7 @@ async function start(session) {
     const params = new URLSearchParams(location.search);
     const want = params.get('screen');
     if (want === 'log') resetLogForm();
-    switchScreen(['issues', 'log', 'reports', 'tasks', 'calendar', 'audits'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
+    switchScreen(['issues', 'log', 'reports', 'tasks', 'calendar'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
     if (params.get('issue')) openIssue(Number(params.get('issue')));
     if (params.toString()) history.replaceState(null, '', location.pathname);
   } finally {
@@ -442,13 +442,12 @@ function bindEvents() {
   $('calStore').addEventListener('change', (e) => { state.calStore = e.target.value; renderCalendar(); });
   $('calNewBtn').addEventListener('click', () => openTaskSheet(null, null, { due: state.calDay || today(), storeId: calStoreForNew(), job: true }));
   $('calImportBtn').addEventListener('click', openImport);
-  $('auditStartBtn').addEventListener('click', openAuditStart);
+  $('detailAuditBtn').addEventListener('click', () => openAuditStart(state.selectedId));
   $('auditStartGo').addEventListener('click', startAudit);
   $('auditStartCancel').addEventListener('click', () => closeSheet('auditStartSheet'));
-  $('auditStore').addEventListener('change', renderAudits);
   $('auditForm').addEventListener('input', onAuditInput);
   $('auditForm').addEventListener('change', onAuditPhotos);
-  $('auditBack').addEventListener('click', async () => { await auditSaveNow(); switchScreen('audits'); });
+  $('auditBack').addEventListener('click', async () => { await auditSaveNow(); backToStore(); });
   $('impCancel').addEventListener('click', () => closeSheet('importSheet'));
   $('impRead').addEventListener('click', readImport);
   $('impSave').addEventListener('click', saveImport);
@@ -542,11 +541,11 @@ function chipGroup(id, onPick) {
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
-const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks', calendar: 'scCalendar', audits: 'scAudits', audit: 'scAudit' };
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks', calendar: 'scCalendar', audit: 'scAudit' };
 function switchScreen(name) {
   state.screen = name;
   Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
-  const navName = name === 'detail' || name === 'users' ? 'stores' : name === 'audit' ? 'audits' : name;
+  const navName = name === 'detail' || name === 'users' ? 'stores' : name === 'audit' ? 'stores' : name;
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.screen === navName));
   if (name === 'stores') renderStores();
   else if (name === 'issues') renderIssues();
@@ -556,7 +555,6 @@ function switchScreen(name) {
   else if (name === 'users') renderUsers();
   else if (name === 'tasks') renderTasks();
   else if (name === 'calendar') renderCalendar();
-  else if (name === 'audits') renderAudits();
   else if (name === 'audit') renderAuditForm();
   window.scrollTo({ top: 0 });
 }
@@ -569,14 +567,12 @@ function rerender() {
   else if (state.screen === 'reports') renderReports();
   else if (state.screen === 'tasks') renderTasks();
   else if (state.screen === 'calendar') renderCalendar();
-  else if (state.screen === 'audits') renderAudits();
 }
 
 // ── HEADER & ACCOUNT CONTROLS ─────────────────────────────────────────
 function renderHeader() {
   const active = state.stores.filter(isActiveStore);
   const open = state.issues.filter((i) => isOpen(i) && isActiveStore(state.byId.get(i.store_id))).length;
-  $('navAudits').hidden = !canAudit();
   $('headerStats').innerHTML = `<span><b>${active.length}</b> stores</span><span class="${open ? 'warn' : ''}"><b>${open}</b> open</span>`;
   const badge = $('navBadge');
   badge.hidden = !open;
@@ -1721,34 +1717,27 @@ function metersBetween(a, b) {
 // Turn the database's coded messages into plain ones.
 const auditError = (e) => String(e?.message || e).replace(/^(NO_STORE_LOCATION|NO_GPS|WEAK_GPS|TOO_FAR):\s*/, '');
 
-// ── List ──
-function renderAudits() {
-  $('auditStartBtn').hidden = !canAudit();
-  const sel = $('auditStore');
-  const mine = myStoreIds();
-  const stores = state.stores.filter((s) => isActiveStore(s) && (!mine || mine.has(s.id)))
-    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
-  const keep = sel.value || 'all';
-  sel.innerHTML = '<option value="all">All stores</option>' + stores.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('');
-  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : 'all';
-  const rows = state.audits.filter((a) => sel.value === 'all' || a.store_id === sel.value);
-  const drafts = rows.filter((a) => a.status === 'draft' && a.auditor_id === state.me?.id);
-  const done = rows.filter((a) => a.status === 'submitted');
-  const avg = done.length ? Math.round(done.reduce((m, a) => m + Number(a.score || 0), 0) / done.length) : null;
-  $('auditsSub').textContent = done.length ? `${done.length} done · average ${avg}` : 'Checklist, photos and a PDF report';
+// ── A store's audits (on the store page) ──
+const canAuditStore = (sid) => isAdmin() || (state.me?.role === 'supervisor' && state.assignments.some((x) => x.user_id === state.me.id && x.store_id === sid));
+
+function storeAuditsHTML(s) {
+  const rows = state.audits.filter((a) => a.store_id === s.id && (a.status === 'submitted' || a.auditor_id === state.me?.id));
   const card = (a) => {
-    const s = state.byId.get(a.store_id);
     const when = a.submitted_at || a.started_at;
     const sc = a.status === 'submitted' ? Math.round(a.score) : null;
     return `<button class="audit-card" data-act="auditopen" data-id="${a.id}">
       ${auditBadge(sc)}
-      <span class="audit-card-main"><b>${esc(s?.name || a.store_id)}</b> <span class="muted">${esc(city(s))}</span>
-        <span class="audit-card-meta">${a.status === 'draft' ? 'Not finished · ' : ''}${esc(fmtDate(isoLocal(new Date(when))))} · ${esc(a.auditor_name || '')}</span></span>
+      <span class="audit-card-main"><b>${a.status === 'draft' ? 'Not finished' : `Score ${sc}`}</b>
+        <span class="audit-card-meta">${esc(fmtDate(isoLocal(new Date(when))))} · ${esc(a.auditor_name || '')}</span></span>
       <i class="ti ti-chevron-right" aria-hidden="true"></i></button>`;
   };
-  $('auditList').innerHTML = (drafts.length ? `<h2 class="section-title">Continue</h2>${drafts.map(card).join('')}` : '')
-    + (done.length ? `<h2 class="section-title">Done</h2>${done.map(card).join('')}` : '')
-    + (!drafts.length && !done.length ? emptyHTML('No audits yet', canAudit() ? 'Start one when you\'re at a store.' : '') : '');
+  const drafts = rows.filter((a) => a.status === 'draft'), done = rows.filter((a) => a.status === 'submitted');
+  return [...drafts, ...done].map(card).join('') || '<p class="task-empty">No audits yet.</p>';
+}
+
+function backToStore() {
+  if (audit?.store_id) state.selectedId = audit.store_id;
+  switchScreen(state.selectedId ? 'detail' : 'stores');
 }
 
 async function loadAudits() {
@@ -1756,28 +1745,24 @@ async function loadAudits() {
 }
 
 // ── Start ──
-function openAuditStart() {
-  const mine = myStoreIds();
-  const stores = state.stores.filter((s) => isActiveStore(s) && (isAdmin() || (mine && mine.has(s.id))))
-    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
-  $('auditStartStore').innerHTML = '<option value="">Pick the store you\'re in</option>' + stores.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('');
+function openAuditStart(sid) {
+  const s = state.byId.get(sid);
+  if (!s) return;
+  $('auditStartStore').textContent = `${s.name} · ${city(s)}`;
+  $('auditStartStore').dataset.id = sid;
   $('auditStartError').hidden = true;
-  $('auditStartNote').hidden = !!stores.length;
   $('auditStartGo').disabled = false;
   $('auditStartGo').textContent = 'Check location & start';
+  // Pick up where they left off instead of starting a second one.
+  const draft = state.audits.find((a) => a.store_id === sid && a.status === 'draft' && a.auditor_id === state.me?.id);
+  if (draft) { openAudit(draft.id); showToast('You already have an unfinished audit here. Picking up where you left off.'); return; }
   openSheet('auditStartSheet');
-  // Guess the store from where they are.
-  getPosition().then((pos) => {
-    const near = stores.filter((s) => s.lat != null).map((s) => ({ s, d: metersBetween(pos, { lat: s.lat, lng: s.lng }) })).sort((a, b) => a.d - b.d)[0];
-    if (near && near.d < 2000 && !$('auditStartStore').value) $('auditStartStore').value = near.s.id;
-  }).catch(() => {});
 }
 
 async function startAudit() {
   const err = $('auditStartError');
   const fail = (m) => { err.textContent = m; err.hidden = false; $('auditStartGo').disabled = false; $('auditStartGo').textContent = 'Check location & start'; };
-  const sid = $('auditStartStore').value;
-  if (!sid) return fail('Pick the store.');
+  const sid = $('auditStartStore').dataset.id;
   const s = state.byId.get(sid);
   if (s?.lat == null) return fail(`${s?.name || 'This store'}'s location isn't set yet. ${isAdmin() ? 'Set it on the store page (Stores → the store → Store location).' : 'Ask Murod to set it.'}`);
   $('auditStartGo').disabled = true;
@@ -1802,6 +1787,7 @@ let auditSaveTimer = null;
 
 async function openAudit(id) {
   try { audit = await db.getAudit(id); } catch (e) { showToast(friendlyDbError(e), { error: true }); return; }
+  $('auditBackLabel').textContent = state.byId.get(audit.store_id)?.name || 'Store';
   const paths = [...auditQs(audit.checklist).flatMap((q) => audit.answers[q.id]?.photos || []), ...(audit.photos || [])];
   await refreshPhotoUrls(paths);
   switchScreen('audit');
@@ -1816,7 +1802,7 @@ async function refreshPhotoUrls(paths) {
 const auditEditable = () => audit && audit.status === 'draft' && audit.auditor_id === state.me?.id;
 
 function renderAuditForm() {
-  if (!audit) { switchScreen('audits'); return; }
+  if (!audit) { switchScreen('stores'); return; }
   const s = state.byId.get(audit.store_id);
   const edit = auditEditable();
   const cl = audit.checklist;
@@ -1986,9 +1972,11 @@ async function deleteAudit() {
   const paths = [...auditQs(audit.checklist).flatMap((q) => audit.answers[q.id]?.photos || []), ...(audit.photos || [])];
   try {
     await db.deleteAudit(audit.id, paths);
+    const sid = audit.store_id;
     audit = null;
     await loadAudits();
-    switchScreen('audits');
+    state.selectedId = sid;
+    switchScreen('detail');
     showToast('Audit deleted');
   } catch (e) { showToast(friendlyDbError(e), { error: true }); }
 }
@@ -2211,6 +2199,11 @@ function renderDetail() {
   btn.onclick = () => toggleStoreActive(s);
 
   $('detailLoc').innerHTML = storeLocationHTML(s);
+  const showAudits = canAudit();
+  $('detailAuditHead').hidden = !showAudits;
+  $('detailAuditBtn').hidden = !canAuditStore(s.id);
+  $('detailAudits').hidden = !showAudits;
+  $('detailAudits').innerHTML = showAudits ? storeAuditsHTML(s) : '';
   $('detailStats').innerHTML = `
     <div class="stat ${open.length ? 'bad' : 'ok'}"><b>${open.length}</b><span>Open</span></div>
     <div class="stat"><b>${issues.length - open.length}</b><span>Resolved</span></div>
