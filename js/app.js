@@ -1671,7 +1671,7 @@ const AUDIT_CHECKLIST = {
     ] }
   ]
 };
-const AUDIT_FENCE_M = 161; // 0.1 mile
+const AUDIT_FENCE_M = 805; // 0.5 mile
 const auditBadge = (sc, extra = '') => (sc == null
   ? `<span class="score none ${extra}" style="--v:0"><span><i class="ti ti-pencil" aria-hidden="true"></i></span></span>`
   : `<span class="score ${band(sc)} ${extra}" style="--v:${sc}"><span>${sc}</span></span>`);
@@ -1779,8 +1779,8 @@ async function startAudit() {
   try {
     const pos = await getPosition();
     const d = metersBetween(pos, { lat: s.lat, lng: s.lng });
-    if (pos.acc > 150) return fail(`Your phone's location isn't exact enough (± ${Math.round(pos.acc)} m). Step near the entrance or a window and try again.`);
-    if (d > AUDIT_FENCE_M + Math.min(pos.acc, 50)) return fail(`You're ${(d / 1609.34).toFixed(2)} miles from ${s.name}. Audits can only be done inside the store (within 0.1 mile).`);
+    if (pos.acc > 300) return fail(`Your phone's location isn't exact enough (± ${Math.round(pos.acc)} m). Step near the entrance or a window and try again.`);
+    if (d > AUDIT_FENCE_M + Math.min(pos.acc, 50)) return fail(`You're ${(d / 1609.34).toFixed(2)} miles from ${s.name}. Audits can only be done at the store (within 0.5 mile).`);
     const id = await db.startAudit(sid, AUDIT_CHECKLIST, pos);
     closeSheet('auditStartSheet');
     await loadAudits();
@@ -2187,7 +2187,7 @@ function storeLocationHTML(s) {
   if (!isAdmin()) return '';
   const set = s.lat != null && s.lng != null;
   return `<div class="store-loc">
-    <div><b>Store location</b><span>${set ? `Set · ${s.lat.toFixed(5)}, ${s.lng.toFixed(5)} · audits must be within 0.1 mile` : 'Not set — needed before anyone can audit this store'}</span></div>
+    <div><b>Store location</b><span>${set ? `Set · ${s.lat.toFixed(5)}, ${s.lng.toFixed(5)} · audits must be within 0.5 mile` : 'Not set — needed before anyone can audit this store'}</span></div>
     <div class="store-loc-btns">
       <button class="btn btn-sm" data-act="locfind" data-id="${esc(s.id)}"><i class="ti ti-search" aria-hidden="true"></i>Find</button>
       <button class="btn btn-sm" data-act="lochere" data-id="${esc(s.id)}"><i class="ti ti-current-location" aria-hidden="true"></i>I'm here</button>
