@@ -1772,7 +1772,7 @@ async function startAudit() {
   const fail = (m) => { err.textContent = m; err.hidden = false; $('auditStartGo').disabled = false; $('auditStartGo').textContent = 'Check location & start'; };
   const sid = $('auditStartStore').dataset.id;
   const s = state.byId.get(sid);
-  if (s?.lat == null) return fail(`${s?.name || 'This store'}'s location isn't set yet. ${isAdmin() ? 'Set it on the store page (Stores → the store → Store location).' : 'Ask Murod to set it.'}`);
+  if (s?.lat == null) return fail(`${s?.name || 'This store'}'s location isn't set yet. ${isAdmin() ? 'Tap "Set store locations" on the Stores page.' : 'Ask Murod to set it.'}`);
   $('auditStartGo').disabled = true;
   $('auditStartGo').textContent = 'Checking location…';
   err.hidden = true;
@@ -2257,7 +2257,6 @@ function renderDetail() {
   btn.textContent = isActiveStore(s) ? 'Mark inactive' : 'Mark active';
   btn.onclick = () => toggleStoreActive(s);
 
-  $('detailLoc').innerHTML = storeLocationHTML(s);
   const showAudits = canAudit();
   $('detailAuditHead').hidden = !showAudits;
   $('detailAuditBtn').hidden = !canAuditStore(s.id);
