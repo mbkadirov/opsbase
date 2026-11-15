@@ -2,6 +2,10 @@
 -- Paste all in Supabase → SQL Editor, nothing highlighted, Run. Safe to run again.
 -- After this, open CSMD → Stores → "Set store locations" to turn the addresses into map pins for audits.
 
+-- Location columns (also added by 013_audits.sql; harmless if they already exist).
+alter table public.stores add column if not exists lat double precision;
+alter table public.stores add column if not exists lng double precision;
+
 with a(acct, num, addr) as (values
   ('Wegmans', '8',    '2 Centerton Rd, Mount Laurel, NJ 08054'),
   ('Wegmans', '9',    '1104 Highway 35, Ocean, NJ 07712'),
