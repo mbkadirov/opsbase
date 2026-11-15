@@ -48,7 +48,13 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const acctRank = (a) => { const i = ACCOUNT_ORDER.indexOf(a); return i < 0 ? 99 : i; };
 const storeNum = (s) => parseInt(String(s.name).replace(/^\D+/, ''), 10) || 0;
-const city = (s) => s?.address || s?.state || '';
+// "3900 W Tilghman St, Allentown, PA 18104" → "Allentown, PA" for lists; the full address shows on the store page.
+const city = (s) => {
+  const a = s?.address || '';
+  const m = a.match(/,\s*([^,]+),\s*([A-Z]{2})\b[^,]*$/);
+  return m ? `${m[1].trim()}, ${m[2]}` : a || s?.state || '';
+};
+const hasStreet = (s) => /^\d/.test(s?.address || '');
 const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => isoLocal(new Date());
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoLocal(d); };
@@ -82,6 +88,7 @@ async function start(session) {
     document.body.classList.remove('signed-out');
     renderAvatar();
     $('addStoreBtn').hidden = !isAdmin();
+    $('pinStoresBtn').hidden = !isAdmin();
     await loadAll();
     const params = new URLSearchParams(location.search);
     const want = params.get('screen');
@@ -473,6 +480,7 @@ function bindEvents() {
   $('logCancelBtn').addEventListener('click', () => { const back = state.selectedId ? 'detail' : 'issues'; resetLogForm(); switchScreen(back); });
 
   $('addStoreBtn').addEventListener('click', () => openSheet('addStoreModal'));
+  $('pinStoresBtn').addEventListener('click', pinAllStores);
   $('cancelStore').addEventListener('click', () => closeSheet('addStoreModal'));
   $('saveStoreBtn').addEventListener('click', handleAddStore);
   document.querySelectorAll('.sheet-overlay').forEach((el) => el.addEventListener('click', (e) => { if (e.target === el) closeSheet(el.id); }));
@@ -2121,6 +2129,44 @@ async function auditPdf() {
 }
 
 // ── Store location (admins) ──
+// Address → map point, using OpenStreetMap (free; one lookup per second).
+async function geocode(q, mustContain = null) {
+  const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=3&countrycodes=us&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
+  if (!r.ok) throw new Error('Map search is busy. Try again in a minute.');
+  const hits = await r.json();
+  return mustContain ? hits.filter((h) => new RegExp(mustContain.split(' ')[0], 'i').test(h.display_name)) : hits;
+}
+
+// Pin every active store that has a street address but no location yet.
+async function pinAllStores() {
+  const todo = state.stores.filter((s) => isActiveStore(s) && hasStreet(s) && s.lat == null);
+  const noAddr = state.stores.filter((s) => isActiveStore(s) && !hasStreet(s) && s.lat == null);
+  if (!todo.length) {
+    showToast(noAddr.length ? `${noAddr.length} store${noAddr.length === 1 ? ' has' : 's have'} no street address yet (${noAddr.slice(0, 3).map((s) => s.name).join(', ')}${noAddr.length > 3 ? '…' : ''}). Use "I'm here" or Paste on the store page.` : 'Every store already has a location.', { duration: 7000 });
+    return;
+  }
+  const btn = $('pinStoresBtn'); btn.disabled = true;
+  let ok = 0; const missed = [];
+  for (const [k, s] of todo.entries()) {
+    btn.textContent = `Pinning ${k + 1} of ${todo.length}…`;
+    try {
+      // Try the full address, then without the street number (malls and highway addresses).
+      let hits = await geocode(s.address);
+      if (!hits.length) { await new Promise((r) => setTimeout(r, 1100)); hits = await geocode(s.address.replace(/^\d+\s+/, '')); }
+      if (hits.length) {
+        await db.setStoreLocation(s.id, Number(hits[0].lat), Number(hits[0].lon));
+        s.lat = Number(hits[0].lat); s.lng = Number(hits[0].lon); ok++;
+      } else missed.push(s.name);
+    } catch (e) {
+      if (/lat|lng|column/i.test(e.message)) { showToast('The database needs the audits update first (migration 013).', { error: true }); break; }
+      missed.push(s.name);
+    }
+    await new Promise((r) => setTimeout(r, 1100));
+  }
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-map-pin" aria-hidden="true"></i>Set store locations';
+  showToast(`${ok} store${ok === 1 ? '' : 's'} pinned${missed.length ? `. Couldn't find: ${missed.join(', ')}. Use "I'm here" or Paste on those store pages.` : '.'}`, { duration: 9000, error: !!missed.length });
+}
+
 function storeLocationHTML(s) {
   if (!isAdmin()) return '';
   const set = s.lat != null && s.lng != null;
@@ -2152,10 +2198,9 @@ async function storeLocHere(id) {
 
 async function storeLocFind(id) {
   const s = state.byId.get(id);
-  const q = `${s.account} ${city(s)}`;
+  const q = hasStreet(s) ? s.address : `${s.account} ${city(s)}`;
   try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=3&countrycodes=us&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
-    const hits = (await r.json()).filter((h) => new RegExp(s.account.split(' ')[0], 'i').test(h.display_name));
+    const hits = await geocode(q, hasStreet(s) ? null : s.account);
     if (!hits.length) { showToast(`Couldn't find "${q}" on the map. Use "I'm here" at the store, or paste the location from Google Maps.`, { error: true, duration: 7000 }); return; }
     const h = hits[0];
     if (!confirm(`Use this location for ${s.name}?\n\n${h.display_name}`)) return;
@@ -2187,7 +2232,7 @@ function renderDetail() {
   const oldest = open.reduce((m, i) => Math.max(m, daysSince(i.date)), 0);
 
   $('detailTitle').textContent = s.name;
-  $('detailSub').textContent = `${city(s)} · ${s.account}${isActiveStore(s) ? '' : ' · inactive'}`;
+  $('detailSub').textContent = `${hasStreet(s) ? s.address : city(s)} · ${s.account}${isActiveStore(s) ? '' : ' · inactive'}`;
   $('detailScore').className = `score score-ring ${band(score)}`;
   $('detailScore').style.setProperty('--v', score);
   $('detailScore').innerHTML = `<span>${score}</span>`;
