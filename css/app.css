@@ -481,3 +481,11 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .cal-store-head b { color: var(--text); font-weight: 600; }
 .cal-store-head > span:first-child { flex: 1; min-width: 0; }
 .cal-store-count { font-size: 13px; }
+
+/* Calendar is information only: past days are dimmed, today stands out. */
+.cal-lbl.k-past { background: var(--surface-2); color: var(--muted); }
+.cal-lbl.k-today { background: var(--accent); color: var(--on-accent); }
+.cal-item.k-past { border-left-color: var(--border); opacity: .7; }
+.cal-item.k-today { border-left-color: var(--accent); }
+.cal-item.k-upcoming { border-left-color: var(--accent-soft); }
+.cal-count { background: var(--surface-2); color: var(--text); }

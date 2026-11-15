@@ -561,9 +561,6 @@ function renderHeader() {
   const tb = $('taskBadge');
   tb.hidden = !mineDue;
   tb.textContent = String(mineDue);
-  const jobs = myJobsDue().length;
-  $('calBadge').hidden = !jobs;
-  $('calBadge').textContent = String(jobs);
 }
 
 function shownStores() {
@@ -932,7 +929,6 @@ const taskReviewQueue = () => state.taskLog.filter((l) => l.review === 'pending'
 // Floor care jobs live on the Calendar; everything else is a follow-up task on the Tasks tab.
 const isJob = (t) => t.source === 'calendar';
 const myOpenTasks = () => state.tasks.filter((t) => !isJob(t) && t.status === 'open' && t.assignee_id === state.me?.id);
-const myJobsDue = () => state.tasks.filter((t) => isJob(t) && t.status === 'open' && t.assignee_id === state.me?.id && t.due_date && t.due_date <= today());
 
 function dueInfo(t) {
   if (!t.due_date) return { text: 'No due date', cls: '' };
@@ -1298,40 +1294,22 @@ function calStoreMatch(storeId) {
 }
 
 // Everything on the calendar between two dates, inclusive.
-// kind: overdue | due | upcoming | pending | done
+// The calendar is information only: every job shows on its date(s); nobody checks them off here.
+// kind: past | today | upcoming
 function calItems(from, to) {
   const out = [];
   const now = today();
-  const loggedDates = new Map();
-  for (const l of state.taskLog) {
-    const t = state.tasks.find((x) => x.id === l.task_id);
-    if (!t || !isJob(t) || !calVisible(t)) continue;
-    const date = l.due_date || isoLocal(new Date(l.done_at));
-    if (!loggedDates.has(t.id)) loggedDates.set(t.id, new Set());
-    loggedDates.get(t.id).add(date);
-    if (t.repeat === 'none' || date < from || date > to) continue;
-    out.push({ date, t, l, kind: l.review === 'pending' ? 'pending' : 'done' });
-  }
+  const kindOf = (d) => (d < now ? 'past' : d === now ? 'today' : 'upcoming');
   for (const t of state.tasks) {
     if (!t.due_date || !isJob(t) || !calVisible(t)) continue;
-    if (t.repeat === 'none') {
-      if (t.due_date < from || t.due_date > to) continue;
-      const kind = t.status === 'done' ? 'done' : t.status === 'pending review' ? 'pending' : t.due_date < now ? 'overdue' : t.due_date === now ? 'due' : 'upcoming';
-      out.push({ date: t.due_date, t, kind, current: t.status === 'open' });
-      continue;
-    }
-    if (t.status !== 'open') continue;
     let d = t.due_date, guard = 0;
     while (d && d <= to && guard++ < 400) {
-      if (d >= from && !(d !== t.due_date && loggedDates.get(t.id)?.has(d))) {
-        const current = d === t.due_date;
-        out.push({ date: d, t, current, kind: d < now && current ? 'overdue' : d === now && current ? 'due' : 'upcoming' });
-      }
+      if (d >= from) out.push({ date: d, t, kind: kindOf(d) });
+      if (t.repeat === 'none') break;
       d = nextOccurrence(t, d);
     }
   }
-  const rank = { overdue: 0, due: 1, upcoming: 2, pending: 3, done: 4 };
-  return out.sort((a, b) => a.date.localeCompare(b.date) || rank[a.kind] - rank[b.kind] || a.t.title.localeCompare(b.t.title));
+  return out.sort((a, b) => a.date.localeCompare(b.date) || storeNum(state.byId.get(a.t.store_id) || {}) - storeNum(state.byId.get(b.t.store_id) || {}) || a.t.title.localeCompare(b.t.title));
 }
 
 function renderCalendarFilter() {
@@ -1367,10 +1345,7 @@ function renderCalendar() {
   const byDate = new Map();
   items.forEach((it) => { if (!byDate.has(it.date)) byDate.set(it.date, []); byDate.get(it.date).push(it); });
   const inMonth = state.calView === 'week' ? items : items.filter((it) => it.date.slice(0, 7) === day.slice(0, 7));
-  const late = inMonth.filter((it) => it.kind === 'overdue').length;
-  const open = inMonth.filter((it) => it.kind === 'due' || it.kind === 'upcoming' || it.kind === 'overdue').length;
-  const done = inMonth.filter((it) => it.kind === 'done').length;
-  $('calSub').textContent = `${open} to do${late ? ` · ${late} overdue` : ''}${done ? ` · ${done} done` : ''}`;
+  $('calSub').textContent = `${inMonth.length} job${inMonth.length === 1 ? '' : 's'} ${state.calView === 'week' ? 'this week' : 'this month'}`;
 
   if (state.calView === 'week') {
     const days = Array.from({ length: 7 }, (_, k) => addDays(from, k));
@@ -1387,22 +1362,17 @@ function renderCalendar() {
   for (let d = from; d <= to; d = addDays(d, 1)) {
     const list = byDate.get(d) || [];
     const other = d.slice(0, 7) !== day.slice(0, 7);
-    const todo = list.filter((it) => it.kind !== 'done' && it.kind !== 'pending');
-    const bad = list.some((it) => it.kind === 'overdue');
-    const allDone = list.length && !todo.length;
     const max = oneStore ? 6 : 2;
     const labels = list.slice(0, max).map((it) => `<span class="cal-lbl k-${it.kind}">${esc(it.t.title)}</span>`).join('');
     const more = list.length > max ? `<span class="cal-more">+${list.length - max}</span>` : '';
-    const count = list.length ? `<span class="cal-count ${bad ? 'bad' : allDone ? 'ok' : ''}">${allDone ? '<i class="ti ti-check" aria-hidden="true"></i>' : todo.length}</span>` : '';
+    const count = list.length ? `<span class="cal-count">${list.length}</span>` : '';
     cells += `<button class="cal-cell${other ? ' other' : ''}${d === today() ? ' today' : ''}${d === day ? ' sel' : ''}" data-act="calday" data-id="${d}"
-      aria-label="${esc(fmtDate(d))}: ${list.length ? `${todo.length} to do, ${list.length - todo.length} done` : 'nothing'}">
+      aria-label="${esc(fmtDate(d))}: ${list.length ? `${list.length} job${list.length === 1 ? '' : 's'}` : 'nothing'}">
       <span class="cal-num">${Number(d.slice(8))}</span>${count}<span class="cal-lbls">${labels}${more}</span></button>`;
   }
   $('calGrid').innerHTML = head + cells;
   $('calAgenda').innerHTML = calDayHTML(day, byDate.get(day) || []);
 }
-
-const CAL_KIND = { overdue: ['Overdue', 'bad'], due: ['Due today', 'warn'], upcoming: ['', ''], pending: ['Waiting for approval', 'warn'], done: ['Done', 'ok'] };
 
 function calDayHTML(d, list, { compactEmpty = false } = {}) {
   const label = new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
@@ -1412,28 +1382,19 @@ function calDayHTML(d, list, { compactEmpty = false } = {}) {
   return head + list.map(calItemHTML).join('');
 }
 
-function calItemHTML(it, { hideStore = false, showDate = false } = {}) {
+function calItemHTML(it, { hideStore = false } = {}) {
   const { t, kind } = it;
   const s = state.byId.get(t.store_id);
-  const [kLabel, kCls] = CAL_KIND[kind];
-  // Only the task's current date can be finished; later repeats unlock once that one is done.
-  const canFinish = it.current && (t.assignee_id === state.me?.id || canSeeUsers() || (state.me?.role === 'crew_lead' && !!s));
-  const who = kind === 'done' || kind === 'pending' ? (it.l?.done_by_name || t.done_by_name || t.assignee_name) : t.assignee_name;
+  const meta = [
+    s && !hideStore ? `${esc(s.name)} ${esc(city(s))}` : '',
+    t.assignee_name ? esc(t.assignee_name) : ''
+  ].filter(Boolean).map((x) => `<span>${x}</span>`).join('<span>·</span>');
   return `<article class="cal-item k-${kind}">
     <div class="cal-item-main">
       <div class="task-title">${esc(t.title)}</div>
-      <div class="task-meta">
-        ${kLabel ? `<span class="task-due ${kCls === 'bad' ? 'overdue' : kCls === 'warn' ? 'today' : ''}">${esc(kLabel)}${showDate ? ` · ${esc(fmtDate(it.date))}` : ''}</span>` : ''}
-        ${s && !hideStore ? `<span>${kLabel ? '· ' : ''}${esc(s.name)} ${esc(city(s))}</span>` : ''}
-        ${who ? `<span>${kLabel || (s && !hideStore) ? '· ' : ''}${esc(who)}</span>` : ''}
-        ${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}
-        ${it.l?.note ? `<span>· ${esc(it.l.note)}</span>` : ''}
-      </div>
+      ${meta || (t.repeat && t.repeat !== 'none') ? `<div class="task-meta">${meta}${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}</div>` : ''}
     </div>
-    <div class="task-actions">
-      ${canFinish ? `<button class="btn btn-sm resolve" data-act="taskdone" data-id="${t.id}"><i class="ti ti-check" aria-hidden="true"></i>Done</button>` : ''}
-      ${isAdmin() && kind !== 'done' ? `<button class="btn btn-sm icon" data-act="taskedit" data-id="${t.id}" aria-label="Edit task"><i class="ti ti-pencil" aria-hidden="true"></i></button>` : ''}
-    </div>
+    ${isAdmin() ? `<div class="task-actions"><button class="btn btn-sm icon" data-act="taskedit" data-id="${t.id}" aria-label="Edit job"><i class="ti ti-pencil" aria-hidden="true"></i></button></div>` : ''}
   </article>`;
 }
 
@@ -1457,41 +1418,34 @@ function calPickDay(d) {
   window.scrollTo({ top: 0 });
 }
 
-// Day view (the default): anything overdue first, then the day's jobs grouped by store.
+// Day view (the default): the day's jobs, grouped by store.
 function renderCalendarDay(day) {
   const now = today();
   const label = new Date(day + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  $('calTitle').textContent = day === now ? 'Today' : day === addDays(now, 1) ? 'Tomorrow' : day === addDays(now, -1) ? 'Yesterday' : label.split(',')[0];
+  const near = day === now ? 'Today' : day === addDays(now, 1) ? 'Tomorrow' : day === addDays(now, -1) ? 'Yesterday' : '';
+  $('calTitle').textContent = near || label.split(',')[0];
   const list = calItems(day, day);
-  const late = day === now ? calItems('2000-01-01', addDays(now, -1)).filter((it) => it.kind === 'overdue') : [];
-  const todo = list.filter((it) => it.kind !== 'done' && it.kind !== 'pending').length;
-  const done = list.length - todo;
-  $('calSub').textContent = `${day === now || day === addDays(now, 1) || day === addDays(now, -1) ? label + ' · ' : ''}${todo} job${todo === 1 ? '' : 's'}${late.length ? ` · ${late.length} overdue` : ''}${done ? ` · ${done} done` : ''}`;
+  const stores = new Set(list.map((it) => it.t.store_id)).size;
+  $('calSub').textContent = `${near ? label : label.split(', ')[1]} · ${list.length} job${list.length === 1 ? '' : 's'}${stores > 1 ? ` in ${stores} stores` : ''}`;
   $('calGrid').innerHTML = '';
   $('calGrid').hidden = true;
-  let html = '';
-  if (late.length) {
-    html += `<div class="cal-day-head bad"><span>Overdue · ${late.length}</span></div>` + late.map((it) => calItemHTML(it, { showDate: true })).join('');
-  }
   const add = isAdmin() ? `<button class="btn btn-sm icon" data-act="calnew" data-id="${day}" aria-label="Add a job on ${esc(label)}"><i class="ti ti-plus" aria-hidden="true"></i></button>` : '';
   if (!list.length) {
-    html += `<div class="cal-day-head"><span>${late.length ? (day === now ? 'Today' : label) : ''}</span>${add}</div><p class="task-empty">No floor care jobs ${day === now ? 'today' : 'this day'}.</p>`;
-  } else {
-    const groups = new Map();
-    list.forEach((it) => { const k = it.t.store_id || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); });
-    const keys = [...groups.keys()].sort((a, b) => {
-      const sa = state.byId.get(a), sb = state.byId.get(b);
-      return (sa ? acctRank(sa.account) : 99) - (sb ? acctRank(sb.account) : 99) || (sa ? storeNum(sa) : 0) - (sb ? storeNum(sb) : 0);
-    });
-    keys.forEach((k, n) => {
-      const s = state.byId.get(k);
-      const g = groups.get(k);
-      const left = g.filter((it) => it.kind !== 'done' && it.kind !== 'pending').length;
-      html += `<div class="cal-store-head"><span><b>${esc(s ? s.name : 'No store')}</b>${s ? ` · ${esc(city(s))}` : ''}</span><span class="cal-store-count">${left ? `${left} to do` : 'All done'}</span>${n === 0 ? add : ''}</div>`
-        + g.map((it) => calItemHTML(it, { hideStore: true })).join('');
-    });
+    $('calAgenda').innerHTML = `<div class="cal-day-head"><span></span>${add}</div><p class="task-empty">No floor care jobs ${day === now ? 'today' : 'this day'}.</p>`;
+    return;
   }
-  $('calAgenda').innerHTML = html;
+  const groups = new Map();
+  list.forEach((it) => { const k = it.t.store_id || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); });
+  const keys = [...groups.keys()].sort((a, b) => {
+    const sa = state.byId.get(a), sb = state.byId.get(b);
+    return (sa ? acctRank(sa.account) : 99) - (sb ? acctRank(sb.account) : 99) || (sa ? storeNum(sa) : 0) - (sb ? storeNum(sb) : 0);
+  });
+  $('calAgenda').innerHTML = keys.map((k, n) => {
+    const s = state.byId.get(k);
+    const g = groups.get(k);
+    return `<div class="cal-store-head"><span><b>${esc(s ? s.name : 'No store')}</b>${s ? ` · ${esc(city(s))}` : ''}</span><span class="cal-store-count">${g.length} job${g.length === 1 ? '' : 's'}</span>${n === 0 ? add : ''}</div>`
+      + g.map((it) => calItemHTML(it, { hideStore: true })).join('');
+  }).join('');
 }
 
 // The store for a new task started from the calendar: the one being filtered on, if any.
@@ -1510,8 +1464,8 @@ function parseMonthCalendar(text, ym) {
   const flush = () => {
     const title = buf.reduce((acc, x) => (acc && !/\/$/.test(acc) ? `${acc} ${x}` : acc + x), '').replace(/\s+/g, ' ').replace(/\s+([&/])\s*$/, '').trim();
     const date = `${ym}-${String(day).padStart(2, '0')}`;
-    // Store hours notes and days already past start unchecked.
-    if (day && title) out.push({ date, title: tidyTitle(title), keep: date >= today() && !/^store (opens|closes|closed|open)\b/i.test(title) });
+    // Store hours notes start unchecked.
+    if (day && title) out.push({ date, title: tidyTitle(title), keep: !/^store (opens|closes|closed|open)\b/i.test(title) });
     buf = [];
   };
   for (const raw of text.replace(/\r/g, '').split('\n')) {
@@ -1541,7 +1495,9 @@ function parseMonthCalendar(text, ym) {
 function tidyTitle(s) {
   const letters = s.replace(/[^A-Za-z]/g, '');
   if (letters.length < 4 || letters !== letters.toUpperCase()) return s;
-  return s.toLowerCase().replace(/(^|[\s/&(-])([a-z])/g, (_, p, c) => p + c.toUpperCase());
+  return s.toLowerCase().replace(/(^|[\s/&(-])([a-z])/g, (_, p, c) => p + c.toUpperCase())
+    .replace(/ (In|Of|And|The|To|At|On|For) /g, (w) => w.toLowerCase())
+    .replace(/\b(Gm|Hbc|Cac|Mgr)\b/g, (w) => (w === 'Mgr' ? w : w.toUpperCase()));
 }
 
 let importRows = [];
