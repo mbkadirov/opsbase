@@ -489,3 +489,5 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .cal-item.k-today { border-left-color: var(--accent); }
 .cal-item.k-upcoming { border-left-color: var(--accent-soft); }
 .cal-count { background: var(--surface-2); color: var(--text); }
+.cal-item.editable { cursor: pointer; }
+.cal-item.editable:hover { border-color: var(--text); }

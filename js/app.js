@@ -1144,6 +1144,7 @@ function openTaskSheet(issueId, editId = null, opts = {}) {
   taskIssueId = i ? i.id : null;
   taskEditId = t ? t.id : null;
   taskIsJob = t ? isJob(t) : !!opts.job;
+  $('taskTitleLabel').textContent = taskIsJob ? 'Job (area or work to do)' : 'What needs to happen';
   $('taskSheetTitle').textContent = t ? (taskIsJob ? 'Edit job' : 'Edit task') : i ? 'Add follow-up' : taskIsJob ? 'New floor care job' : 'New task';
   $('taskSave').textContent = t ? 'Save' : i ? 'Add follow-up' : taskIsJob ? 'Add to calendar' : 'Add task';
   const s = i ? state.byId.get(i.store_id) : null;
@@ -1389,7 +1390,8 @@ function calItemHTML(it, { hideStore = false } = {}) {
     s && !hideStore ? `${esc(s.name)} ${esc(city(s))}` : '',
     t.assignee_name ? esc(t.assignee_name) : ''
   ].filter(Boolean).map((x) => `<span>${x}</span>`).join('<span>·</span>');
-  return `<article class="cal-item k-${kind}">
+  const edit = isAdmin() ? ` data-act="taskedit" data-id="${t.id}" role="button" tabindex="0" aria-label="Edit ${esc(t.title)}"` : '';
+  return `<article class="cal-item k-${kind}${isAdmin() ? ' editable' : ''}"${edit}>
     <div class="cal-item-main">
       <div class="task-title">${esc(t.title)}</div>
       ${meta || (t.repeat && t.repeat !== 'none') ? `<div class="task-meta">${meta}${t.repeat && t.repeat !== 'none' ? `<span class="tag repeat"><i class="ti ti-repeat" aria-hidden="true"></i> ${esc(repeatText(t))}</span>` : ''}</div>` : ''}
