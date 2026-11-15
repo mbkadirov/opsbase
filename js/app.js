@@ -2137,6 +2137,24 @@ async function geocode(q, mustContain = null) {
   return mustContain ? hits.filter((h) => new RegExp(mustContain.split(' ')[0], 'i').test(h.display_name)) : hits;
 }
 
+// Best map point for a store: the store itself on the map ("Wegmans, Allentown, PA"),
+// then its street address. House-number lookups can land a few miles down a long road.
+async function storeGeocode(s) {
+  const brand = s.account.split(' ')[0];
+  const where = city(s);
+  if (where) {
+    const hits = await geocode(`${brand}, ${where}`, brand);
+    const shop = hits.find((h) => /shop|amenity/.test(h.class)) || hits[0];
+    if (shop) return { lat: Number(shop.lat), lng: Number(shop.lon), label: shop.display_name };
+    await new Promise((r) => setTimeout(r, 1100));
+  }
+  if (hasStreet(s)) {
+    const hits = await geocode(s.address);
+    if (hits[0]) return { lat: Number(hits[0].lat), lng: Number(hits[0].lon), label: hits[0].display_name };
+  }
+  return null;
+}
+
 // Pin every active store that has a street address but no location yet.
 async function pinAllStores() {
   const todo = state.stores.filter((s) => isActiveStore(s) && hasStreet(s) && s.lat == null);
@@ -2150,12 +2168,10 @@ async function pinAllStores() {
   for (const [k, s] of todo.entries()) {
     btn.textContent = `Pinning ${k + 1} of ${todo.length}…`;
     try {
-      // Try the full address, then without the street number (malls and highway addresses).
-      let hits = await geocode(s.address);
-      if (!hits.length) { await new Promise((r) => setTimeout(r, 1100)); hits = await geocode(s.address.replace(/^\d+\s+/, '')); }
-      if (hits.length) {
-        await db.setStoreLocation(s.id, Number(hits[0].lat), Number(hits[0].lon));
-        s.lat = Number(hits[0].lat); s.lng = Number(hits[0].lon); ok++;
+      const g = await storeGeocode(s);
+      if (g) {
+        await db.setStoreLocation(s.id, g.lat, g.lng);
+        s.lat = g.lat; s.lng = g.lng; ok++;
       } else missed.push(s.name);
     } catch (e) {
       if (/lat|lng|column/i.test(e.message)) { showToast('The database needs the audits update first (migration 013).', { error: true }); break; }
@@ -2198,13 +2214,11 @@ async function storeLocHere(id) {
 
 async function storeLocFind(id) {
   const s = state.byId.get(id);
-  const q = hasStreet(s) ? s.address : `${s.account} ${city(s)}`;
   try {
-    const hits = await geocode(q, hasStreet(s) ? null : s.account);
-    if (!hits.length) { showToast(`Couldn't find "${q}" on the map. Use "I'm here" at the store, or paste the location from Google Maps.`, { error: true, duration: 7000 }); return; }
-    const h = hits[0];
-    if (!confirm(`Use this location for ${s.name}?\n\n${h.display_name}`)) return;
-    await saveStoreLocation(id, Number(h.lat), Number(h.lon), 'from the map');
+    const g = await storeGeocode(s);
+    if (!g) { showToast(`Couldn't find ${s.name} on the map. Use "I'm here" at the store, or paste the location from Google Maps.`, { error: true, duration: 7000 }); return; }
+    if (!confirm(`Use this location for ${s.name}?\n\n${g.label}`)) return;
+    await saveStoreLocation(id, g.lat, g.lng, 'from the map');
   } catch { showToast('Map search didn\'t work. Try "I\'m here" or Paste.', { error: true }); }
 }
 
