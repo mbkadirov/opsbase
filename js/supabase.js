@@ -26,6 +26,34 @@ export const auth = {
 };
 
 export const db = {
+  // ── Audits ──
+  async getAudits() {
+    return check(await supabase.from('audits')
+      .select('id, store_id, auditor_id, auditor_name, status, score, started_at, submitted_at')
+      .order('started_at', { ascending: false }).limit(300));
+  },
+  async getAudit(id) { return check(await supabase.from('audits').select('*').eq('id', id).single()); },
+  async startAudit(store, checklist, pos) {
+    return check(await supabase.rpc('start_audit', { p_store: store, p_checklist: checklist, p_lat: pos.lat, p_lng: pos.lng, p_acc: pos.acc }));
+  },
+  async saveAudit(id, patch) { return check(await supabase.from('audits').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id)); },
+  async submitAudit(id, score, pos) {
+    return check(await supabase.rpc('submit_audit', { p_id: id, p_score: score, p_lat: pos.lat, p_lng: pos.lng, p_acc: pos.acc }));
+  },
+  async deleteAudit(id, paths) {
+    if (paths.length) await supabase.storage.from('audits').remove(paths);
+    return check(await supabase.from('audits').delete().eq('id', id));
+  },
+  async uploadAuditPhoto(path, blob) {
+    return check(await supabase.storage.from('audits').upload(path, blob, { contentType: 'image/jpeg', upsert: false }));
+  },
+  async removeAuditPhoto(path) { return check(await supabase.storage.from('audits').remove([path])); },
+  async photoUrls(paths) {
+    if (!paths.length) return [];
+    return check(await supabase.storage.from('audits').createSignedUrls(paths, 3600));
+  },
+  async setStoreLocation(id, lat, lng) { return check(await supabase.from('stores').update({ lat, lng }).eq('id', id).select()); },
+
   async getStores() {
     return check(await supabase.from('stores').select('*').order('account').order('id'));
   },

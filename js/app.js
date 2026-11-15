@@ -30,7 +30,8 @@ const state = {
   taskFilter: 'mine',
   calView: 'day',
   calDay: null,
-  calStore: 'all'
+  calStore: 'all',
+  audits: []
 };
 
 const ROLE_LABEL = { admin: 'Admin', supervisor: 'Supervisor', crew_lead: 'Crew lead', pending: 'Pending', disabled: 'Disabled' };
@@ -85,7 +86,7 @@ async function start(session) {
     const params = new URLSearchParams(location.search);
     const want = params.get('screen');
     if (want === 'log') resetLogForm();
-    switchScreen(['issues', 'log', 'reports', 'tasks', 'calendar'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
+    switchScreen(['issues', 'log', 'reports', 'tasks', 'calendar', 'audits'].includes(want) ? want : params.get('issue') ? 'issues' : 'stores');
     if (params.get('issue')) openIssue(Number(params.get('issue')));
     if (params.toString()) history.replaceState(null, '', location.pathname);
   } finally {
@@ -381,14 +382,16 @@ async function saveAssignments() {
 async function loadAll() {
   if (!state.me) return;
   try {
-    const [stores, issues, tasks, taskLog, profiles, assignments] = await Promise.all([
+    const [stores, issues, tasks, taskLog, profiles, assignments, audits] = await Promise.all([
       db.getStores(), db.getIssues(),
       db.getTasks().catch(() => []),
       db.getTaskLog().catch(() => []),
       canSeeUsers() ? db.getProfiles().catch(() => []) : Promise.resolve([]),
-      db.getAssignments().catch(() => null)
+      db.getAssignments().catch(() => null),
+      ['admin', 'supervisor'].includes(state.me?.role) ? db.getAudits().catch(() => []) : Promise.resolve([])
     ]);
     if (assignments) state.assignments = assignments;
+    state.audits = audits;
     state.stores = stores;
     state.issues = issues;
     state.tasks = tasks;
@@ -439,6 +442,13 @@ function bindEvents() {
   $('calStore').addEventListener('change', (e) => { state.calStore = e.target.value; renderCalendar(); });
   $('calNewBtn').addEventListener('click', () => openTaskSheet(null, null, { due: state.calDay || today(), storeId: calStoreForNew(), job: true }));
   $('calImportBtn').addEventListener('click', openImport);
+  $('auditStartBtn').addEventListener('click', openAuditStart);
+  $('auditStartGo').addEventListener('click', startAudit);
+  $('auditStartCancel').addEventListener('click', () => closeSheet('auditStartSheet'));
+  $('auditStore').addEventListener('change', renderAudits);
+  $('auditForm').addEventListener('input', onAuditInput);
+  $('auditForm').addEventListener('change', onAuditPhotos);
+  $('auditBack').addEventListener('click', async () => { await auditSaveNow(); switchScreen('audits'); });
   $('impCancel').addEventListener('click', () => closeSheet('importSheet'));
   $('impRead').addEventListener('click', readImport);
   $('impSave').addEventListener('click', saveImport);
@@ -508,6 +518,16 @@ function bindEvents() {
     else if (act === 'logissue') openNote('taskissue', Number(id), logIssueText(Number(id)));
     else if (act === 'logfollow') followUpFromLog(Number(id));
     else if (act === 'calday') calPickDay(id);
+    else if (act === 'auditopen') openAudit(Number(id));
+    else if (act === 'auditans') { const [q, v] = id.split('|'); auditAnswer(q, /^\d$/.test(v) ? Number(v) : v); }
+    else if (act === 'auditphotodel') auditPhotoDelete(id);
+    else if (act === 'auditphotoview') window.open(auditUrls.get(id), '_blank', 'noopener');
+    else if (act === 'auditsubmit') submitAudit();
+    else if (act === 'auditdelete') deleteAudit();
+    else if (act === 'auditpdf') auditPdf();
+    else if (act === 'locfind') storeLocFind(id);
+    else if (act === 'lochere') storeLocHere(id);
+    else if (act === 'locpaste') storeLocPaste(id);
     else if (act === 'calnew') openTaskSheet(null, null, { due: id, storeId: calStoreForNew(), job: true });
   });
 }
@@ -522,11 +542,11 @@ function chipGroup(id, onPick) {
 }
 
 // ── SCREENS ───────────────────────────────────────────────────────────
-const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks', calendar: 'scCalendar' };
+const SCREENS = { stores: 'scStores', issues: 'scIssues', log: 'scLog', detail: 'scDetail', reports: 'scReports', auth: 'scAuth', pending: 'scPending', users: 'scUsers', tasks: 'scTasks', calendar: 'scCalendar', audits: 'scAudits', audit: 'scAudit' };
 function switchScreen(name) {
   state.screen = name;
   Object.entries(SCREENS).forEach(([k, id]) => $(id).classList.toggle('active', k === name));
-  const navName = name === 'detail' || name === 'users' ? 'stores' : name;
+  const navName = name === 'detail' || name === 'users' ? 'stores' : name === 'audit' ? 'audits' : name;
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.screen === navName));
   if (name === 'stores') renderStores();
   else if (name === 'issues') renderIssues();
@@ -536,6 +556,8 @@ function switchScreen(name) {
   else if (name === 'users') renderUsers();
   else if (name === 'tasks') renderTasks();
   else if (name === 'calendar') renderCalendar();
+  else if (name === 'audits') renderAudits();
+  else if (name === 'audit') renderAuditForm();
   window.scrollTo({ top: 0 });
 }
 
@@ -547,12 +569,14 @@ function rerender() {
   else if (state.screen === 'reports') renderReports();
   else if (state.screen === 'tasks') renderTasks();
   else if (state.screen === 'calendar') renderCalendar();
+  else if (state.screen === 'audits') renderAudits();
 }
 
 // ── HEADER & ACCOUNT CONTROLS ─────────────────────────────────────────
 function renderHeader() {
   const active = state.stores.filter(isActiveStore);
   const open = state.issues.filter((i) => isOpen(i) && isActiveStore(state.byId.get(i.store_id))).length;
+  $('navAudits').hidden = !canAudit();
   $('headerStats').innerHTML = `<span><b>${active.length}</b> stores</span><span class="${open ? 'warn' : ''}"><b>${open}</b> open</span>`;
   const badge = $('navBadge');
   badge.hidden = !open;
@@ -1596,6 +1620,569 @@ async function saveImport() {
   btn.disabled = false;
 }
 
+// ── AUDITS ────────────────────────────────────────────────────────────
+// Supervisors audit their stores on their phone: a checklist (pass/fail, 1–5 ratings, notes),
+// photos, and a location check so it can only be filled in at the store. Admins get a PDF.
+// To change the questions, edit this list. Each audit keeps a copy of the list it was done with.
+const AUDIT_CHECKLIST = {
+  version: 1,
+  sections: [
+    { id: 'entrance', title: 'Entrance & vestibule', questions: [
+      { id: 'ent_clean', type: 'pf', text: 'Floor clean, no dirt, debris or salt residue' },
+      { id: 'ent_mats', type: 'pf', text: 'Mats clean, flat and in place' },
+      { id: 'ent_shine', type: 'rate', text: 'Floor shine / appearance' }
+    ] },
+    { id: 'floor', title: 'Sales floor', questions: [
+      { id: 'fl_buildup', type: 'pf', text: 'No buildup along edges, corners and under fixtures' },
+      { id: 'fl_marks', type: 'pf', text: 'No black marks, scuffs or sticky spots' },
+      { id: 'fl_cove', type: 'pf', text: 'Baseboards and cove base clean' },
+      { id: 'fl_shine', type: 'rate', text: 'Overall floor shine / gloss' }
+    ] },
+    { id: 'coolers', title: 'Coolers & freezers', questions: [
+      { id: 'co_floor', type: 'pf', text: 'Floors clean, no ice or food buildup' },
+      { id: 'co_drains', type: 'pf', text: 'Drains clean, flowing, no odor' },
+      { id: 'co_cal', type: 'pf', text: "This month's calendar areas done", help: 'Check the store\'s floor care calendar on the Calendar tab' },
+      { id: 'co_rate', type: 'rate', text: 'Overall cooler & freezer condition' }
+    ] },
+    { id: 'back', title: 'Backroom & receiving', questions: [
+      { id: 'bk_floor', type: 'pf', text: 'Floors swept and scrubbed' },
+      { id: 'bk_water', type: 'pf', text: 'No standing water' },
+      { id: 'bk_rate', type: 'rate', text: 'Overall backroom condition' }
+    ] },
+    { id: 'equip', title: 'Equipment & chemicals', questions: [
+      { id: 'eq_clean', type: 'pf', text: 'Equipment clean, stored in its place, charged' },
+      { id: 'eq_work', type: 'pf', text: 'Equipment working (pads, squeegees, batteries)' },
+      { id: 'eq_chem', type: 'pf', text: 'Chemicals labeled, closed, SDS available' }
+    ] },
+    { id: 'safety', title: 'Safety', questions: [
+      { id: 'sf_signs', type: 'pf', text: 'Wet floor signs used, and picked up after' },
+      { id: 'sf_slip', type: 'pf', text: 'No slip hazards found' },
+      { id: 'sf_ppe', type: 'pf', text: 'Crew in uniform / PPE' }
+    ] },
+    { id: 'store', title: 'Store feedback', questions: [
+      { id: 'st_talk', type: 'pf', text: 'Spoke with a store manager', yes: 'Yes', no: 'No' },
+      { id: 'st_who', type: 'text', text: 'Manager name', optional: true },
+      { id: 'st_fb', type: 'text', text: 'What the store said', optional: true },
+      { id: 'st_notes', type: 'text', text: 'Your notes and follow-ups', optional: true }
+    ] }
+  ]
+};
+const AUDIT_FENCE_M = 161; // 0.1 mile
+const auditBadge = (sc, extra = '') => (sc == null
+  ? `<span class="score none ${extra}" style="--v:0"><span><i class="ti ti-pencil" aria-hidden="true"></i></span></span>`
+  : `<span class="score ${band(sc)} ${extra}" style="--v:${sc}"><span>${sc}</span></span>`);
+const auditQs = (cl) => cl.sections.flatMap((s) => s.questions);
+
+// Pass = 1, fail = 0, rating 1–5 → 0–1. N/A and text don't count.
+function auditScore(cl, answers, sectionId = null) {
+  let sum = 0, n = 0;
+  for (const s of cl.sections) {
+    if (sectionId && s.id !== sectionId) continue;
+    for (const q of s.questions) {
+      const v = answers[q.id]?.v;
+      if (q.type === 'pf' && (v === 'pass' || v === 'fail')) { sum += v === 'pass' ? 1 : 0; n++; }
+      if (q.type === 'rate' && Number(v) >= 1) { sum += (Number(v) - 1) / 4; n++; }
+    }
+  }
+  return n ? Math.round((sum / n) * 100) : null;
+}
+
+// What still has to be filled in before submitting.
+function auditMissing(cl, answers) {
+  const out = [];
+  for (const q of auditQs(cl)) {
+    const a = answers[q.id] || {};
+    if (q.type !== 'text' && !a.v) out.push({ q, why: 'Not answered' });
+    else if (q.type === 'pf' && a.v === 'fail' && !q.yes) {
+      if (!(a.note || '').trim()) out.push({ q, why: 'Failed: add a note' });
+      if (!(a.photos || []).length) out.push({ q, why: 'Failed: add a photo' });
+    }
+  }
+  return out;
+}
+
+const canAudit = () => ['admin', 'supervisor'].includes(state.me?.role);
+
+// ── Location ──
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('This phone or browser can\'t share its location.'));
+    navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      (e) => reject(new Error(e.code === 1 ? 'Location is blocked for CSMD. Allow location in your phone\'s settings, then try again.' : 'Couldn\'t get your location. Step near the entrance or a window and try again.')),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+}
+function metersBetween(a, b) {
+  const r = (x) => (x * Math.PI) / 180;
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+// Turn the database's coded messages into plain ones.
+const auditError = (e) => String(e?.message || e).replace(/^(NO_STORE_LOCATION|NO_GPS|WEAK_GPS|TOO_FAR):\s*/, '');
+
+// ── List ──
+function renderAudits() {
+  $('auditStartBtn').hidden = !canAudit();
+  const sel = $('auditStore');
+  const mine = myStoreIds();
+  const stores = state.stores.filter((s) => isActiveStore(s) && (!mine || mine.has(s.id)))
+    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  const keep = sel.value || 'all';
+  sel.innerHTML = '<option value="all">All stores</option>' + stores.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('');
+  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : 'all';
+  const rows = state.audits.filter((a) => sel.value === 'all' || a.store_id === sel.value);
+  const drafts = rows.filter((a) => a.status === 'draft' && a.auditor_id === state.me?.id);
+  const done = rows.filter((a) => a.status === 'submitted');
+  const avg = done.length ? Math.round(done.reduce((m, a) => m + Number(a.score || 0), 0) / done.length) : null;
+  $('auditsSub').textContent = done.length ? `${done.length} done · average ${avg}` : 'Checklist, photos and a PDF report';
+  const card = (a) => {
+    const s = state.byId.get(a.store_id);
+    const when = a.submitted_at || a.started_at;
+    const sc = a.status === 'submitted' ? Math.round(a.score) : null;
+    return `<button class="audit-card" data-act="auditopen" data-id="${a.id}">
+      ${auditBadge(sc)}
+      <span class="audit-card-main"><b>${esc(s?.name || a.store_id)}</b> <span class="muted">${esc(city(s))}</span>
+        <span class="audit-card-meta">${a.status === 'draft' ? 'Not finished · ' : ''}${esc(fmtDate(isoLocal(new Date(when))))} · ${esc(a.auditor_name || '')}</span></span>
+      <i class="ti ti-chevron-right" aria-hidden="true"></i></button>`;
+  };
+  $('auditList').innerHTML = (drafts.length ? `<h2 class="section-title">Continue</h2>${drafts.map(card).join('')}` : '')
+    + (done.length ? `<h2 class="section-title">Done</h2>${done.map(card).join('')}` : '')
+    + (!drafts.length && !done.length ? emptyHTML('No audits yet', canAudit() ? 'Start one when you\'re at a store.' : '') : '');
+}
+
+async function loadAudits() {
+  try { state.audits = await db.getAudits(); } catch { state.audits = []; }
+}
+
+// ── Start ──
+function openAuditStart() {
+  const mine = myStoreIds();
+  const stores = state.stores.filter((s) => isActiveStore(s) && (isAdmin() || (mine && mine.has(s.id))))
+    .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
+  $('auditStartStore').innerHTML = '<option value="">Pick the store you\'re in</option>' + stores.map((s) => `<option value="${esc(s.id)}">${esc(s.name)} · ${esc(city(s))}</option>`).join('');
+  $('auditStartError').hidden = true;
+  $('auditStartNote').hidden = !!stores.length;
+  $('auditStartGo').disabled = false;
+  $('auditStartGo').textContent = 'Check location & start';
+  openSheet('auditStartSheet');
+  // Guess the store from where they are.
+  getPosition().then((pos) => {
+    const near = stores.filter((s) => s.lat != null).map((s) => ({ s, d: metersBetween(pos, { lat: s.lat, lng: s.lng }) })).sort((a, b) => a.d - b.d)[0];
+    if (near && near.d < 2000 && !$('auditStartStore').value) $('auditStartStore').value = near.s.id;
+  }).catch(() => {});
+}
+
+async function startAudit() {
+  const err = $('auditStartError');
+  const fail = (m) => { err.textContent = m; err.hidden = false; $('auditStartGo').disabled = false; $('auditStartGo').textContent = 'Check location & start'; };
+  const sid = $('auditStartStore').value;
+  if (!sid) return fail('Pick the store.');
+  const s = state.byId.get(sid);
+  if (s?.lat == null) return fail(`${s?.name || 'This store'}'s location isn't set yet. ${isAdmin() ? 'Set it on the store page (Stores → the store → Store location).' : 'Ask Murod to set it.'}`);
+  $('auditStartGo').disabled = true;
+  $('auditStartGo').textContent = 'Checking location…';
+  err.hidden = true;
+  try {
+    const pos = await getPosition();
+    const d = metersBetween(pos, { lat: s.lat, lng: s.lng });
+    if (pos.acc > 150) return fail(`Your phone's location isn't exact enough (± ${Math.round(pos.acc)} m). Step near the entrance or a window and try again.`);
+    if (d > AUDIT_FENCE_M + Math.min(pos.acc, 50)) return fail(`You're ${(d / 1609.34).toFixed(2)} miles from ${s.name}. Audits can only be done inside the store (within 0.1 mile).`);
+    const id = await db.startAudit(sid, AUDIT_CHECKLIST, pos);
+    closeSheet('auditStartSheet');
+    await loadAudits();
+    await openAudit(Number(id));
+  } catch (e) { fail(auditError(e)); }
+}
+
+// ── Fill in / view ──
+let audit = null;        // the open audit (full row)
+let auditUrls = new Map(); // photo path → signed url
+let auditSaveTimer = null;
+
+async function openAudit(id) {
+  try { audit = await db.getAudit(id); } catch (e) { showToast(friendlyDbError(e), { error: true }); return; }
+  const paths = [...auditQs(audit.checklist).flatMap((q) => audit.answers[q.id]?.photos || []), ...(audit.photos || [])];
+  await refreshPhotoUrls(paths);
+  switchScreen('audit');
+}
+
+async function refreshPhotoUrls(paths) {
+  const need = paths.filter((p) => !auditUrls.has(p));
+  if (!need.length) return;
+  try { (await db.photoUrls(need)).forEach((r) => { if (r.signedUrl) auditUrls.set(r.path, r.signedUrl); }); } catch { /* shown as missing */ }
+}
+
+const auditEditable = () => audit && audit.status === 'draft' && audit.auditor_id === state.me?.id;
+
+function renderAuditForm() {
+  if (!audit) { switchScreen('audits'); return; }
+  const s = state.byId.get(audit.store_id);
+  const edit = auditEditable();
+  const cl = audit.checklist;
+  const ans = audit.answers || {};
+  $('auditTitle').textContent = s ? s.name : audit.store_id;
+  const when = new Date(audit.submitted_at || audit.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  $('auditSub').textContent = `${city(s)} · ${audit.auditor_name || ''} · ${when}`;
+  const total = auditQs(cl).filter((q) => q.type !== 'text').length;
+  const answered = auditQs(cl).filter((q) => q.type !== 'text' && ans[q.id]?.v).length;
+  const sc = audit.status === 'submitted' ? Math.round(audit.score) : auditScore(cl, ans);
+  $('auditBar').innerHTML = `
+    ${auditBadge(sc)}
+    <span class="audit-bar-text"><b>${audit.status === 'submitted' ? 'Score' : 'Score so far'}</b>
+      <span>${audit.status === 'submitted' ? `Submitted · at the store (${Math.round(audit.submit_distance_m ?? 0)} m)` : `${answered} of ${total} answered`}</span></span>
+    ${audit.status === 'submitted' ? `<button class="btn btn-primary btn-sm" data-act="auditpdf"><i class="ti ti-file-type-pdf" aria-hidden="true"></i>PDF</button>` : ''}`;
+
+  const photoStrip = (paths, qid) => `<div class="audit-photos">${(paths || []).map((p) => `
+      <span class="audit-photo">${auditUrls.get(p) ? `<img src="${esc(auditUrls.get(p))}" alt="Audit photo" loading="lazy" data-act="auditphotoview" data-id="${esc(p)}">` : '<i class="ti ti-photo-off" aria-hidden="true"></i>'}
+        ${edit ? `<button class="audit-photo-x" data-act="auditphotodel" data-id="${esc(qid)}|${esc(p)}" aria-label="Remove photo"><i class="ti ti-x" aria-hidden="true"></i></button>` : ''}</span>`).join('')}
+      ${edit ? `<label class="btn btn-sm audit-add-photo"><i class="ti ti-camera" aria-hidden="true"></i>Photo<input type="file" accept="image/*" capture="environment" multiple hidden data-photo="${esc(qid)}"></label>` : ''}</div>`;
+
+  let html = '';
+  for (const sec of cl.sections) {
+    const ss = auditScore(cl, ans, sec.id);
+    html += `<section class="audit-sec"><div class="audit-sec-head"><h2>${esc(sec.title)}</h2>${ss == null ? '' : auditBadge(ss, 'sm')}</div>`;
+    for (const q of sec.questions) {
+      const a = ans[q.id] || {};
+      const failed = q.type === 'pf' && a.v === 'fail' && !q.yes;
+      html += `<div class="audit-q${failed ? ' failed' : ''}" id="aq-${esc(q.id)}"><div class="audit-q-text">${esc(q.text)}${q.help ? `<span class="audit-q-help">${esc(q.help)}</span>` : ''}</div>`;
+      if (q.type === 'pf') {
+        const opts = [['pass', q.yes || 'Pass'], ['fail', q.no || 'Fail'], ['na', 'N/A']];
+        html += `<div class="seg" role="radiogroup" aria-label="${esc(q.text)}">${opts.map(([v, l]) => `<button class="seg-btn v-${v}${a.v === v ? ' on' : ''}" ${edit ? `data-act="auditans" data-id="${esc(q.id)}|${v}"` : 'disabled'} role="radio" aria-checked="${a.v === v}">${esc(l)}</button>`).join('')}</div>`;
+      } else if (q.type === 'rate') {
+        html += `<div class="seg rate" role="radiogroup" aria-label="${esc(q.text)}, 1 poor to 5 excellent">${[1, 2, 3, 4, 5].map((n) => `<button class="seg-btn${Number(a.v) === n ? ' on' : ''}" ${edit ? `data-act="auditans" data-id="${esc(q.id)}|${n}"` : 'disabled'} role="radio" aria-checked="${Number(a.v) === n}">${n}</button>`).join('')}</div>
+          <div class="seg-legend"><span>Poor</span><span>Excellent</span></div>`;
+      }
+      if (q.type === 'text') {
+        html += edit ? `<textarea rows="2" data-note="${esc(q.id)}" data-field="v" placeholder="${q.optional ? 'Optional' : ''}">${esc(a.v || '')}</textarea>` : `<p class="audit-text">${esc(a.v || '—')}</p>`;
+      } else if (edit) {
+        html += `<textarea rows="${failed ? 2 : 1}" data-note="${esc(q.id)}" data-field="note" placeholder="${failed ? 'What\'s wrong? (needed)' : 'Note (optional)'}">${esc(a.note || '')}</textarea>`;
+      } else if (a.note) html += `<p class="audit-text">${esc(a.note)}</p>`;
+      if (q.type !== 'text' && (edit || (a.photos || []).length)) html += photoStrip(a.photos, q.id);
+      html += '</div>';
+    }
+    html += '</section>';
+  }
+  html += `<section class="audit-sec"><div class="audit-sec-head"><h2>More photos</h2></div>
+    ${edit || (audit.photos || []).length ? photoStrip(audit.photos, '_general') : '<p class="audit-text">None</p>'}</section>`;
+  if (edit) {
+    html += `<p class="field-error" id="auditError" hidden></p>
+      <div class="audit-actions">
+        <button class="btn btn-ghost" data-act="auditdelete">Delete draft</button>
+        <button class="btn btn-primary" data-act="auditsubmit"><i class="ti ti-map-pin-check" aria-hidden="true"></i>Submit audit</button>
+      </div>
+      <p class="page-sub audit-fine">Submitting checks your location again. Your answers save as you go, so you can come back to this.</p>`;
+  } else if (isAdmin()) {
+    html += `<div class="audit-actions"><button class="btn btn-ghost" data-act="auditdelete">Delete audit</button></div>`;
+  }
+  $('auditForm').innerHTML = html;
+}
+
+function auditSaveSoon() {
+  clearTimeout(auditSaveTimer);
+  auditSaveTimer = setTimeout(auditSaveNow, 700);
+}
+async function auditSaveNow() {
+  clearTimeout(auditSaveTimer);
+  if (!auditEditable()) return;
+  try { await db.saveAudit(audit.id, { answers: audit.answers, photos: audit.photos }); $('auditSaved').textContent = 'Saved'; }
+  catch (e) { $('auditSaved').textContent = 'Not saved, check connection'; showToast(friendlyDbError(e), { error: true }); }
+}
+
+function auditAnswer(qid, v) {
+  const a = audit.answers[qid] || (audit.answers[qid] = {});
+  a.v = a.v === v ? null : v; // tap again to clear
+  auditSaveSoon();
+  const y = window.scrollY;
+  renderAuditForm();
+  window.scrollTo({ top: y });
+}
+
+function onAuditInput(e) {
+  const t = e.target;
+  if (t.dataset.note) {
+    const a = audit.answers[t.dataset.note] || (audit.answers[t.dataset.note] = {});
+    a[t.dataset.field] = t.value;
+    $('auditSaved').textContent = 'Saving…';
+    auditSaveSoon();
+  }
+}
+
+// Shrink to at most 1600 px so uploads are quick on a phone connection.
+async function shrinkPhoto(file) {
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = () => reject(new Error('That file isn\'t a photo.'));
+    i.src = URL.createObjectURL(file);
+  });
+  const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(img.src);
+  return new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.72));
+}
+
+async function onAuditPhotos(e) {
+  const input = e.target;
+  if (!input.dataset.photo || !input.files?.length) return;
+  const qid = input.dataset.photo;
+  const files = [...input.files];
+  $('auditSaved').textContent = `Uploading ${files.length} photo${files.length === 1 ? '' : 's'}…`;
+  for (const f of files) {
+    try {
+      const blob = await shrinkPhoto(f);
+      const path = `${audit.id}/${qid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jpg`;
+      await db.uploadAuditPhoto(path, blob);
+      auditUrls.set(path, URL.createObjectURL(blob));
+      if (qid === '_general') audit.photos = [...(audit.photos || []), path];
+      else { const a = audit.answers[qid] || (audit.answers[qid] = {}); a.photos = [...(a.photos || []), path]; }
+    } catch (err) { showToast(`Photo not added: ${friendlyDbError(err)}`, { error: true }); }
+  }
+  await auditSaveNow();
+  const y = window.scrollY;
+  renderAuditForm();
+  window.scrollTo({ top: y });
+}
+
+async function auditPhotoDelete(key) {
+  const [qid, path] = key.split('|');
+  if (qid === '_general') audit.photos = (audit.photos || []).filter((p) => p !== path);
+  else if (audit.answers[qid]) audit.answers[qid].photos = (audit.answers[qid].photos || []).filter((p) => p !== path);
+  await auditSaveNow();
+  db.removeAuditPhoto(path).catch(() => {});
+  const y = window.scrollY;
+  renderAuditForm();
+  window.scrollTo({ top: y });
+}
+
+async function submitAudit() {
+  const err = $('auditError');
+  const fail = (m) => { err.textContent = m; err.hidden = false; btn.disabled = false; btn.innerHTML = '<i class="ti ti-map-pin-check" aria-hidden="true"></i>Submit audit'; };
+  const btn = document.querySelector('[data-act="auditsubmit"]');
+  const missing = auditMissing(audit.checklist, audit.answers);
+  if (missing.length) {
+    fail(`${missing.length} thing${missing.length === 1 ? '' : 's'} left: ${missing.slice(0, 3).map((m) => `"${m.q.text}" (${m.why.toLowerCase()})`).join(', ')}${missing.length > 3 ? '…' : ''}`);
+    document.getElementById(`aq-${missing[0].q.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Checking location…';
+  try {
+    await auditSaveNow();
+    const pos = await getPosition();
+    await db.submitAudit(audit.id, auditScore(audit.checklist, audit.answers) ?? 0, pos);
+    audit = await db.getAudit(audit.id);
+    await loadAudits();
+    renderAuditForm();
+    window.scrollTo({ top: 0 });
+    showToast(`Audit submitted · score ${Math.round(audit.score)}`);
+  } catch (e) { fail(auditError(e)); }
+}
+
+async function deleteAudit() {
+  const draft = audit.status === 'draft';
+  if (!confirm(draft ? 'Delete this unfinished audit and its photos?' : 'Delete this audit and its photos? This can\'t be undone.')) return;
+  const paths = [...auditQs(audit.checklist).flatMap((q) => audit.answers[q.id]?.photos || []), ...(audit.photos || [])];
+  try {
+    await db.deleteAudit(audit.id, paths);
+    audit = null;
+    await loadAudits();
+    switchScreen('audits');
+    showToast('Audit deleted');
+  } catch (e) { showToast(friendlyDbError(e), { error: true }); }
+}
+
+// ── PDF ──
+let jsPdfLoading = null;
+function loadJsPdf() {
+  if (window.jspdf) return Promise.resolve(window.jspdf.jsPDF);
+  jsPdfLoading ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js';
+    s.onload = () => resolve(window.jspdf.jsPDF);
+    s.onerror = () => { jsPdfLoading = null; reject(new Error('Couldn\'t load the PDF maker. Check your connection.')); };
+    document.head.appendChild(s);
+  });
+  return jsPdfLoading;
+}
+
+async function photoData(path) {
+  const url = auditUrls.get(path);
+  if (!url) return null;
+  const blob = await (await fetch(url)).blob();
+  const data = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+  const dims = await new Promise((r) => { const i = new Image(); i.onload = () => r([i.naturalWidth, i.naturalHeight]); i.onerror = () => r([4, 3]); i.src = data; });
+  return { data, w: dims[0], h: dims[1] };
+}
+
+async function auditPdf() {
+  const btn = document.querySelector('[data-act="auditpdf"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Making PDF…'; }
+  try {
+    const JsPDF = await loadJsPdf();
+    const a = audit, cl = a.checklist, ans = a.answers || {};
+    const s = state.byId.get(a.store_id);
+    const allPaths = [...auditQs(cl).flatMap((q) => ans[q.id]?.photos || []), ...(a.photos || [])];
+    await refreshPhotoUrls(allPaths);
+    const doc = new JsPDF({ unit: 'pt', format: 'letter' });
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40;
+    let y = M;
+    const need = (h) => { if (y + h > H - M) { doc.addPage(); y = M; } };
+    const text = (t, x, size = 10, style = 'normal', color = [20, 20, 20], width = W - M - x) => {
+      doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...color);
+      const lines = doc.splitTextToSize(String(t), width);
+      lines.forEach((ln) => { need(size * 1.3); doc.text(ln, x, y + size); y += size * 1.3; });
+    };
+    const scoreColor = (n) => (n >= 85 ? [30, 120, 60] : n >= 70 ? [180, 120, 0] : [190, 40, 40]);
+    const when = new Date(a.submitted_at || a.started_at);
+
+    // Header
+    text('Floor Care Audit', M, 20, 'bold');
+    text(`${s?.name || a.store_id} · ${city(s)}`, M, 13, 'normal', [60, 60, 60]);
+    y += 4;
+    text(`Date: ${when.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}`, M, 10, 'normal', [90, 90, 90]);
+    text(`Auditor: ${a.auditor_name || ''}`, M, 10, 'normal', [90, 90, 90]);
+    text(a.status === 'submitted' ? `Location checked: at the store (${Math.round(a.submit_distance_m ?? 0)} m from store pin)` : 'Not submitted yet', M, 10, 'normal', [90, 90, 90]);
+    const total = Math.round(a.score ?? auditScore(cl, ans) ?? 0);
+    doc.setFillColor(...scoreColor(total)); doc.roundedRect(W - M - 90, M, 90, 56, 6, 6, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(26); doc.text(String(total), W - M - 45, M + 32, { align: 'center' });
+    doc.setFontSize(9); doc.setFont('helvetica', 'normal'); doc.text('SCORE', W - M - 45, M + 47, { align: 'center' });
+    y = Math.max(y, M + 64) + 8;
+
+    // Section summary
+    doc.setDrawColor(220, 220, 220); doc.line(M, y, W - M, y); y += 10;
+    text('Summary', M, 12, 'bold');
+    for (const sec of cl.sections) {
+      const ss = auditScore(cl, ans, sec.id);
+      if (ss == null) continue;
+      need(16);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(20, 20, 20); doc.text(sec.title, M, y + 10);
+      doc.setFillColor(235, 235, 235); doc.rect(M + 170, y + 3, 260, 8, 'F');
+      doc.setFillColor(...scoreColor(ss)); doc.rect(M + 170, y + 3, 260 * ss / 100, 8, 'F');
+      doc.setTextColor(...scoreColor(ss)); doc.setFont('helvetica', 'bold'); doc.text(String(ss), M + 440, y + 10);
+      y += 16;
+    }
+    const fails = auditQs(cl).filter((q) => q.type === 'pf' && !q.yes && ans[q.id]?.v === 'fail');
+    if (fails.length) {
+      y += 6;
+      text(`Needs attention (${fails.length})`, M, 12, 'bold', [190, 40, 40]);
+      fails.forEach((q) => text(`• ${q.text}${ans[q.id]?.note ? ` — ${ans[q.id].note}` : ''}`, M + 6, 10));
+    }
+
+    // Each section in full
+    const label = (q, v) => (q.type === 'pf' ? ({ pass: q.yes || 'Pass', fail: q.no || 'Fail', na: 'N/A' }[v] || '—') : q.type === 'rate' ? (v ? `${v} / 5` : '—') : '');
+    const vColor = (q, v) => (q.type === 'pf' ? (v === 'pass' ? [30, 120, 60] : v === 'fail' && !q.yes ? [190, 40, 40] : [90, 90, 90]) : q.type === 'rate' ? scoreColor(((Number(v) || 1) - 1) * 25) : [20, 20, 20]);
+    for (const sec of cl.sections) {
+      y += 10; need(40);
+      doc.setDrawColor(220, 220, 220); doc.line(M, y, W - M, y); y += 8;
+      text(sec.title, M, 13, 'bold');
+      for (const q of sec.questions) {
+        const v = ans[q.id]?.v;
+        need(18);
+        if (q.type === 'text') {
+          text(q.text, M, 10, 'bold', [60, 60, 60]);
+          text(v || '—', M + 10, 10);
+        } else {
+          const top = y;
+          text(q.text, M, 10, 'normal', [20, 20, 20], W - 2 * M - 70);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...vColor(q, v));
+          doc.text(label(q, v), W - M, top + 10, { align: 'right' });
+          if (ans[q.id]?.note) text(`Note: ${ans[q.id].note}`, M + 10, 9, 'italic', [90, 90, 90]);
+        }
+        await pdfPhotos(doc, ans[q.id]?.photos || []);
+        y += 4;
+      }
+    }
+    if ((a.photos || []).length) {
+      y += 10; need(240);
+      doc.setDrawColor(220, 220, 220); doc.line(M, y, W - M, y); y += 8;
+      text('More photos', M, 13, 'bold');
+      await pdfPhotos(doc, a.photos);
+    }
+    // Page numbers
+    const n = doc.getNumberOfPages();
+    for (let i = 1; i <= n; i++) {
+      doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(140, 140, 140);
+      doc.text(`CSMD · ${s?.name || a.store_id} audit · ${when.toLocaleDateString('en-US')} · page ${i} of ${n}`, W / 2, H - 20, { align: 'center' });
+    }
+    const file = `Audit ${s?.name || a.store_id} ${isoLocal(when)}.pdf`.replace(/[#/\\]/g, '');
+    const blob = doc.output('blob');
+    const f = new File([blob], file, { type: 'application/pdf' });
+    if (navigator.canShare?.({ files: [f] })) { try { await navigator.share({ files: [f], title: file }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = file; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+
+    // Two photos per row, kept in proportion.
+    async function pdfPhotos(d, paths) {
+      if (!paths.length) return;
+      const colW = (W - 2 * M - 12) / 2, maxH = 190;
+      for (let i = 0; i < paths.length; i += 2) {
+        const pair = (await Promise.all(paths.slice(i, i + 2).map((p) => photoData(p).catch(() => null)))).filter(Boolean);
+        if (!pair.length) continue;
+        const sizes = pair.map((p) => { const k = Math.min(colW / p.w, maxH / p.h); return [p.w * k, p.h * k]; });
+        const rowH = Math.max(...sizes.map((z) => z[1]));
+        need(rowH + 6); y += 4;
+        pair.forEach((p, k) => d.addImage(p.data, 'JPEG', M + k * (colW + 12), y, sizes[k][0], sizes[k][1]));
+        y += rowH + 4;
+      }
+    }
+  } catch (e) { showToast(friendlyDbError(e), { error: true }); }
+  finally { const b = document.querySelector('[data-act="auditpdf"]'); if (b) { b.disabled = false; b.innerHTML = '<i class="ti ti-file-type-pdf" aria-hidden="true"></i>PDF'; } }
+}
+
+// ── Store location (admins) ──
+function storeLocationHTML(s) {
+  if (!isAdmin()) return '';
+  const set = s.lat != null && s.lng != null;
+  return `<div class="store-loc">
+    <div><b>Store location</b><span>${set ? `Set · ${s.lat.toFixed(5)}, ${s.lng.toFixed(5)} · audits must be within 0.1 mile` : 'Not set — needed before anyone can audit this store'}</span></div>
+    <div class="store-loc-btns">
+      <button class="btn btn-sm" data-act="locfind" data-id="${esc(s.id)}"><i class="ti ti-search" aria-hidden="true"></i>Find</button>
+      <button class="btn btn-sm" data-act="lochere" data-id="${esc(s.id)}"><i class="ti ti-current-location" aria-hidden="true"></i>I'm here</button>
+      <button class="btn btn-sm" data-act="locpaste" data-id="${esc(s.id)}"><i class="ti ti-clipboard" aria-hidden="true"></i>Paste</button>
+    </div></div>`;
+}
+
+async function saveStoreLocation(id, lat, lng, how) {
+  try {
+    await db.setStoreLocation(id, lat, lng);
+    const s = state.byId.get(id); s.lat = lat; s.lng = lng;
+    renderDetail();
+    showToast(`Location saved${how ? ` (${how})` : ''}`);
+  } catch (e) { showToast(/lat|lng|column/i.test(e.message) ? 'The database needs the audits update first (migration 013).' : friendlyDbError(e), { error: true }); }
+}
+
+async function storeLocHere(id) {
+  try {
+    const pos = await getPosition();
+    if (pos.acc > 100 && !confirm(`Your location is only exact to about ${Math.round(pos.acc)} m. Save it anyway?`)) return;
+    await saveStoreLocation(id, pos.lat, pos.lng, 'your current location');
+  } catch (e) { showToast(e.message, { error: true }); }
+}
+
+async function storeLocFind(id) {
+  const s = state.byId.get(id);
+  const q = `${s.account} ${city(s)}`;
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=3&countrycodes=us&q=${encodeURIComponent(q)}`, { headers: { Accept: 'application/json' } });
+    const hits = (await r.json()).filter((h) => new RegExp(s.account.split(' ')[0], 'i').test(h.display_name));
+    if (!hits.length) { showToast(`Couldn't find "${q}" on the map. Use "I'm here" at the store, or paste the location from Google Maps.`, { error: true, duration: 7000 }); return; }
+    const h = hits[0];
+    if (!confirm(`Use this location for ${s.name}?\n\n${h.display_name}`)) return;
+    await saveStoreLocation(id, Number(h.lat), Number(h.lon), 'from the map');
+  } catch { showToast('Map search didn\'t work. Try "I\'m here" or Paste.', { error: true }); }
+}
+
+async function storeLocPaste(id) {
+  const v = prompt('In Google Maps, right-click the store and click the numbers at the top to copy them. Paste them here (like 40.5891, -75.5638):');
+  if (!v) return;
+  const m = v.match(/(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/);
+  if (!m) { showToast('That doesn\'t look like a location. It should be two numbers like 40.5891, -75.5638.', { error: true }); return; }
+  await saveStoreLocation(id, Number(m[1]), Number(m[2]), 'pasted');
+}
+
 // ── STORE DETAIL ──────────────────────────────────────────────────────
 function openStore(id) {
   if (!state.byId.has(id)) return;
@@ -1623,6 +2210,7 @@ function renderDetail() {
   btn.textContent = isActiveStore(s) ? 'Mark inactive' : 'Mark active';
   btn.onclick = () => toggleStoreActive(s);
 
+  $('detailLoc').innerHTML = storeLocationHTML(s);
   $('detailStats').innerHTML = `
     <div class="stat ${open.length ? 'bad' : 'ok'}"><b>${open.length}</b><span>Open</span></div>
     <div class="stat"><b>${issues.length - open.length}</b><span>Resolved</span></div>

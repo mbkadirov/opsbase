@@ -234,6 +234,7 @@
         </div>
       </div>
       <div class="stat-row" id="detailStats"></div>
+      <div id="detailLoc"></div>
 
       <div class="section-head">
         <h2 class="section-title">Issues</h2>
@@ -260,6 +261,29 @@
     </section>
 
     <!-- REPORTS -->
+    <section class="screen" id="scAudits" aria-labelledby="auditsTitle">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title" id="auditsTitle">Audits</h1>
+          <p class="page-sub" id="auditsSub">Checklist, photos and a PDF report</p>
+        </div>
+        <button class="btn btn-primary btn-sm" id="auditStartBtn" hidden><i class="ti ti-clipboard-plus" aria-hidden="true"></i>Start audit</button>
+      </div>
+      <select id="auditStore" class="cal-store" aria-label="Which stores"></select>
+      <div class="audit-list" id="auditList"></div>
+    </section>
+
+    <section class="screen" id="scAudit" aria-labelledby="auditTitle">
+      <div class="detail-head">
+        <button class="back" id="auditBack"><i class="ti ti-chevron-left" aria-hidden="true"></i>Audits</button>
+        <span class="audit-saved" id="auditSaved" aria-live="polite"></span>
+      </div>
+      <h1 class="page-title" id="auditTitle"></h1>
+      <p class="page-sub" id="auditSub"></p>
+      <div class="audit-bar" id="auditBar"></div>
+      <div id="auditForm"></div>
+    </section>
+
     <section class="screen" id="scCalendar" aria-labelledby="calTitle">
       <div class="page-head">
         <div>
@@ -326,6 +350,7 @@
     <button class="nav-item" data-screen="log"><i class="ti ti-circle-plus" aria-hidden="true"></i>Log</button>
     <button class="nav-item" data-screen="tasks"><i class="ti ti-checklist" aria-hidden="true"></i>Tasks<span class="nav-badge" id="taskBadge" hidden></span></button>
     <button class="nav-item" data-screen="calendar"><i class="ti ti-calendar-month" aria-hidden="true"></i>Calendar</button>
+    <button class="nav-item" data-screen="audits" id="navAudits" hidden><i class="ti ti-clipboard-check" aria-hidden="true"></i>Audits</button>
     <button class="nav-item" data-screen="reports"><i class="ti ti-chart-bar" aria-hidden="true"></i>Reports</button>
   </nav>
 </div>
@@ -459,6 +484,24 @@
 </div>
 
 <!-- NOTE (resolve / send back / reopen) -->
+<div class="sheet-overlay" id="auditStartSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="auditStartTitle">
+    <div class="sheet-handle"></div>
+    <h2 id="auditStartTitle">Start an audit</h2>
+    <p class="page-sub">You need to be inside the store. CSMD checks your phone's location (within 0.1 mile) when you start and again when you submit.</p>
+    <div class="field">
+      <label for="auditStartStore">Store</label>
+      <select id="auditStartStore"></select>
+    </div>
+    <p class="field-hint" id="auditStartNote" hidden>No stores are assigned to you yet. Ask Murod to add your stores under Users.</p>
+    <p class="field-error" id="auditStartError" hidden></p>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="auditStartCancel">Cancel</button>
+      <button class="btn btn-primary" id="auditStartGo">Check location &amp; start</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-overlay" id="importSheet">
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="impTitle">
     <div class="sheet-handle"></div>
