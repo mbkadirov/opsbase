@@ -1,7 +1,7 @@
 -- CSMD: Store audits — checklist answers, photos, and a check that the auditor is at the store.
 -- Run AFTER 012_calendar.sql. Paste all in Supabase → SQL Editor, nothing highlighted, Run. Safe to run again.
 
--- ── Store location (for the "within 0.5 mile" check) ──
+-- ── Store location (for the "within 1 mile" check) ──
 alter table public.stores add column if not exists lat double precision;
 alter table public.stores add column if not exists lng double precision;
 
@@ -57,7 +57,7 @@ returns double precision language sql immutable as $$
     cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lng2 - lng1) / 2), 2)));
 $$;
 
--- 0.5 mile = 805 m. Phones are less exact indoors, so up to 50 m of the reported accuracy is allowed on top.
+-- 1 mile = 1609 m. Phones are less exact indoors, so up to 50 m of the reported accuracy is allowed on top.
 -- A fix less exact than 300 m is refused (move near a window or the entrance and try again).
 create or replace function private.check_at_store(p_store text, p_lat double precision, p_lng double precision, p_acc double precision)
 returns double precision language plpgsql stable security definer set search_path = public as $$
@@ -69,8 +69,8 @@ begin
   if p_lat is null or p_lng is null then raise exception 'NO_GPS: Turn on location for CSMD to do an audit.'; end if;
   if coalesce(p_acc, 9999) > 300 then raise exception 'WEAK_GPS: Your phone''s location isn''t exact enough (± % m). Step near the entrance or a window and try again.', round(coalesce(p_acc, 9999)); end if;
   d := meters_between(s.lat, s.lng, p_lat, p_lng);
-  if d > 805 + least(coalesce(p_acc, 0), 50) then
-    raise exception 'TOO_FAR: You''re % miles from the store. Audits can only be done at the store (within 0.5 mile).', round((d / 1609.34)::numeric, 2);
+  if d > 1609 + least(coalesce(p_acc, 0), 50) then
+    raise exception 'TOO_FAR: You''re % miles from the store. Audits can only be done at the store (within 1 mile).', round((d / 1609.34)::numeric, 2);
   end if;
   return d;
 end
