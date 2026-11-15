@@ -19,6 +19,7 @@ with a(acct, num, addr) as (values
   ('Wegmans', '135',  '2000 Crossings Blvd, Lancaster, PA 17601'),
   ('Wegmans', '152',  '925 Vansant Dr, Yardley, PA 19067'),
   ('Wegmans', '1004', '2110 Route 70 W, Cherry Hill, NJ 08002'),
+  ('Wegmans', '1000', '439 Doe Meadow Dr, Owings Mills, MD 21117'),
   ('Zara',    '7999', '2002 Annapolis Mall Rd, Annapolis, MD 21401'),
   ('Zara',    '10836','825 Dulaney Valley Rd, Towson, MD 21204')
 )
