@@ -191,7 +191,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); box-sha
 
 /* ── Issue cards ─────────────────────────── */
 .issue-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
-.issue-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: grid; gap: 8px; }
+.issue-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
+.issue-card > *, .issue-open, .issue-top > :first-child { min-width: 0; max-width: 100%; }
 .issue-card.resolved { opacity: .72; }
 .issue-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .issue-store { font-weight: 600; font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
