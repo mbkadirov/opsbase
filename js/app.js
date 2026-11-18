@@ -47,7 +47,12 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const acctRank = (a) => { const i = ACCOUNT_ORDER.indexOf(a); return i < 0 ? 99 : i; };
 const storeNum = (s) => parseInt(String(s.name).replace(/^\D+/, ''), 10) || 0;
-const city = (s) => s?.address || s?.state || '';
+// "3900 W Tilghman St, Allentown, PA 18104" → "Allentown, PA" for lists and cards.
+const city = (s) => {
+  const a = s?.address || '';
+  const m = a.match(/,\s*([^,]+),\s*([A-Z]{2})\b[^,]*$/);
+  return m ? `${m[1].trim()}, ${m[2]}` : a || s?.state || '';
+};
 const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => isoLocal(new Date());
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoLocal(d); };
