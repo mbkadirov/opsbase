@@ -978,15 +978,28 @@ const taskStoreOk = (storeId) => state.taskStore === 'all' || (state.taskStore =
 
 function renderTaskStoreFilter() {
   const sel = $('taskStore');
-  const used = new Set(state.tasks.filter((t) => !isJob(t)).map((t) => t.store_id || ''));
-  const stores = state.stores.filter((st) => used.has(st.id) || (isActiveStore(st) && st.id === state.taskStore))
+  // Only stores that have something to show under the chip picked (Mine / Everyone / Done).
+  const mine = (t) => state.taskFilter !== 'mine' || t.assignee_id === state.me?.id;
+  const count = new Map();
+  const add = (sid) => count.set(sid || '', (count.get(sid || '') || 0) + 1);
+  if (state.taskFilter === 'done') {
+    (state.taskLog.length ? state.taskLog.map((l) => state.tasks.find((t) => t.id === l.task_id)) : state.tasks.filter((t) => t.status === 'done'))
+      .filter((t) => t && !isJob(t) && (canSeeUsers() || t.assignee_id === state.me?.id)).forEach((t) => add(t.store_id));
+  } else {
+    state.tasks.filter((t) => !isJob(t) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && mine(t)).forEach((t) => add(t.store_id));
+    if (isAdmin()) {
+      approvalQueue().forEach((i) => add(i.store_id));
+      taskReviewQueue().forEach((l) => { const t = state.tasks.find((x) => x.id === l.task_id); if (t && !isJob(t)) add(t.store_id); });
+    }
+  }
+  const stores = state.stores.filter((st) => count.has(st.id))
     .sort((a, b) => acctRank(a.account) - acctRank(b.account) || storeNum(a) - storeNum(b));
-  const count = (sid) => state.tasks.filter((t) => !isJob(t) && t.status === 'open' && (t.store_id || '') === sid && (state.taskFilter !== 'mine' || t.assignee_id === state.me?.id)).length;
   sel.innerHTML = '<option value="all">All stores</option>'
-    + stores.map((st) => { const n = count(st.id); return `<option value="${esc(st.id)}">${esc(st.name)} · ${esc(city(st))}${n ? ` (${n})` : ''}</option>`; }).join('')
-    + (used.has('') ? `<option value="none">Not tied to a store${count('') ? ` (${count('')})` : ''}</option>` : '');
+    + stores.map((st) => `<option value="${esc(st.id)}">${esc(st.name)} · ${esc(city(st))} (${count.get(st.id)})</option>`).join('')
+    + (count.has('') ? `<option value="none">Not tied to a store (${count.get('')})</option>` : '');
   if (![...sel.options].some((o) => o.value === state.taskStore)) state.taskStore = 'all';
   sel.value = state.taskStore;
+  sel.hidden = stores.length + (count.has('') ? 1 : 0) < 2;
 }
 
 function renderTasks() {
