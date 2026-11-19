@@ -492,3 +492,4 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .cal-count { background: var(--surface-2); color: var(--text); }
 .cal-item.editable { cursor: pointer; }
 .cal-item.editable:hover { border-color: var(--text); }
+.task-store { margin: 4px 0 12px; }
