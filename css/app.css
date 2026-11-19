@@ -540,3 +540,4 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .audit-start-store { font-size: 17px; font-weight: 600; margin: 4px 0 8px; }
 #detailAudits { margin-bottom: 8px; }
 #scStores .page-head { flex-wrap: wrap; }
+.task-store { margin: 4px 0 12px; }
