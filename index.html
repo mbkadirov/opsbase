@@ -256,7 +256,13 @@
         <button class="chip" data-val="all" id="taskAllChip" hidden>Everyone</button>
         <button class="chip" data-val="done">Done</button>
       </div>
-      <select id="taskStoreFilter" class="task-store" aria-label="Which store"></select>
+      <div class="task-bar">
+        <select id="taskStoreFilter" class="task-store" aria-label="Which store"></select>
+        <div class="chips task-due" id="taskDueChips" aria-label="When due">
+          <button class="chip" data-due="today" id="taskTodayChip">Due today<span class="n"></span></button>
+          <button class="chip" data-due="overdue" id="taskLateChip">Overdue<span class="n"></span></button>
+        </div>
+      </div>
       <div class="issue-list" id="taskList"></div>
     </section>
 

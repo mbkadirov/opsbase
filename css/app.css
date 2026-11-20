@@ -492,4 +492,9 @@ input[type=email]:focus, input[type=password]:focus { border-color: var(--accent
 .cal-count { background: var(--surface-2); color: var(--text); }
 .cal-item.editable { cursor: pointer; }
 .cal-item.editable:hover { border-color: var(--text); }
-.task-store { margin: 4px 0 12px; }
+.task-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.task-bar[hidden] { display: none; }
+.task-store { flex: 1 1 150px; min-width: 0; width: auto; margin: 0; }
+.task-store[hidden] { display: none; }
+.chips.task-due { padding-bottom: 0; flex: 0 0 auto; }
+.chips.task-due[hidden] { display: none; }

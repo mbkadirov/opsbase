@@ -29,6 +29,7 @@ const state = {
   taskLog: [],
   taskFilter: 'mine',
   taskStore: 'all',
+  taskDue: 'any', // 'any' | 'today' | 'overdue' — works with Mine / Everyone
   calView: 'day',
   calDay: null,
   calStore: 'all'
@@ -431,7 +432,21 @@ function bindEvents() {
   $('issueCatFilter').addEventListener('change', (e) => { state.issueCategory = e.target.value; renderIssues(); });
   chipGroup('issueChips', (v) => { state.issueStatus = v; renderIssues(); });
   chipGroup('reportChips', (v) => { state.reportPeriod = v; renderReports(); });
-  chipGroup('taskChips', (v) => { state.taskFilter = v; renderTasks(); });
+  // Mine / Everyone / Done pick whose tasks; Due today / Overdue narrow them (tap again to clear).
+  const onTaskChip = (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    if (chip.dataset.due) {
+      state.taskDue = state.taskDue === chip.dataset.due ? 'any' : chip.dataset.due;
+      if (state.taskFilter === 'done') state.taskFilter = canSeeUsers() ? 'all' : 'mine';
+    } else {
+      state.taskFilter = chip.dataset.val;
+      if (state.taskFilter === 'done') state.taskDue = 'any';
+    }
+    renderTasks();
+  };
+  $('taskChips').addEventListener('click', onTaskChip);
+  $('taskDueChips').addEventListener('click', onTaskChip);
   $('taskStoreFilter').addEventListener('change', (e) => { state.taskStore = e.target.value; renderTasks(); });
   $('taskCancel').addEventListener('click', () => closeSheet('taskSheet'));
   $('taskSave').addEventListener('click', saveTask);
@@ -973,6 +988,9 @@ function taskCardHTML(t) {
   </article>`;
 }
 
+// Tasks tab due filter: 'today' = due today, 'overdue' = past due.
+const taskDueOk = (t) => state.taskDue === 'any' || (t.status === 'open' && dueInfo(t).cls === state.taskDue);
+
 // Tasks tab store filter: 'all', 'none' (not tied to a store), or a store id.
 const taskStoreOk = (storeId) => state.taskStore === 'all' || (state.taskStore === 'none' ? !storeId : storeId === state.taskStore);
 
@@ -986,8 +1004,8 @@ function renderTaskStoreFilter() {
     (state.taskLog.length ? state.taskLog.map((l) => state.tasks.find((t) => t.id === l.task_id)) : state.tasks.filter((t) => t.status === 'done'))
       .filter((t) => t && !isJob(t) && (canSeeUsers() || t.assignee_id === state.me?.id)).forEach((t) => add(t.store_id));
   } else {
-    state.tasks.filter((t) => !isJob(t) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && mine(t)).forEach((t) => add(t.store_id));
-    if (isAdmin()) {
+    state.tasks.filter((t) => !isJob(t) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && mine(t) && taskDueOk(t)).forEach((t) => add(t.store_id));
+    if (isAdmin() && state.taskDue === 'any') {
       approvalQueue().forEach((i) => add(i.store_id));
       taskReviewQueue().forEach((l) => { const t = state.tasks.find((x) => x.id === l.task_id); if (t && !isJob(t)) add(t.store_id); });
     }
@@ -1000,6 +1018,8 @@ function renderTaskStoreFilter() {
   if (![...sel.options].some((o) => o.value === state.taskStore)) state.taskStore = 'all';
   sel.value = state.taskStore;
   sel.hidden = stores.length + (count.has('') ? 1 : 0) < 2;
+  $('taskDueChips').hidden = state.taskFilter === 'done';
+  sel.closest('.task-bar').hidden = sel.hidden && state.taskFilter === 'done';
 }
 
 function renderTasks() {
@@ -1007,18 +1027,27 @@ function renderTasks() {
   $('taskAllChip').hidden = !canSeeUsers();
   $('newTaskBtn').hidden = !isAdmin();
   if (!canSeeUsers() && state.taskFilter === 'all') state.taskFilter = 'mine';
-  $('taskChips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c.dataset.val === state.taskFilter));
+  document.querySelectorAll('#taskChips .chip, #taskDueChips .chip').forEach((c) => c.classList.toggle('active',
+    c.dataset.due ? c.dataset.due === state.taskDue : c.dataset.val === state.taskFilter));
+  // Counts on Due today / Overdue for the current Mine/Everyone + store pick.
+  const openPool = state.tasks.filter((t) => !isJob(t) && t.status === 'open' && taskStoreOk(t.store_id)
+    && (state.taskFilter !== 'mine' || t.assignee_id === state.me?.id));
+  for (const [id, cls] of [['taskTodayChip', 'today'], ['taskLateChip', 'overdue']]) {
+    const n = openPool.filter((t) => dueInfo(t).cls === cls).length;
+    $(id).querySelector('.n').textContent = n || '';
+    $(id).classList.toggle('attention', cls === 'overdue' && n > 0 && state.taskDue !== 'overdue');
+  }
   const list = $('taskList');
   let rows;
   const logStoreOk = (l) => { const t = state.tasks.find((x) => x.id === l.task_id); return !!t && !isJob(t) && taskStoreOk(t.store_id); };
   if (state.taskFilter === 'done') rows = state.taskLog.length ? state.taskLog.filter(logStoreOk)
     : state.tasks.filter((t) => !isJob(t) && taskStoreOk(t.store_id) && t.status === 'done' && (canSeeUsers() || t.assignee_id === state.me?.id))
       .sort((a, b) => (b.done_at || '').localeCompare(a.done_at || ''));
-  else rows = state.tasks.filter((t) => !isJob(t) && taskStoreOk(t.store_id) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && (state.taskFilter === 'all' || t.assignee_id === state.me?.id))
+  else rows = state.tasks.filter((t) => !isJob(t) && taskStoreOk(t.store_id) && (t.status === 'open' || (t.status === 'pending review' && !isAdmin())) && (state.taskFilter === 'all' || t.assignee_id === state.me?.id) && taskDueOk(t))
     .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999'));
   const overdue = rows.filter((t) => t.status === 'open' && dueInfo(t).cls === 'overdue').length;
-  const approvals = state.taskFilter !== 'done' && isAdmin() ? approvalQueue().filter((i) => taskStoreOk(i.store_id)) : [];
-  const reviews = state.taskFilter !== 'done' && isAdmin() ? taskReviewQueue().filter(logStoreOk) : [];
+  const approvals = state.taskFilter !== 'done' && state.taskDue === 'any' && isAdmin() ? approvalQueue().filter((i) => taskStoreOk(i.store_id)) : [];
+  const reviews = state.taskFilter !== 'done' && state.taskDue === 'any' && isAdmin() ? taskReviewQueue().filter(logStoreOk) : [];
   const toApprove = approvals.length + reviews.length;
   $('tasksSub').textContent = state.taskFilter === 'done' ? `${rows.length} finished`
     : `${toApprove ? `${toApprove} to approve · ` : ''}${rows.length} open${overdue ? ` · ${overdue} overdue` : ''}`;
@@ -1027,7 +1056,7 @@ function renderTasks() {
   if (!rows.length) {
     list.innerHTML = approvalHTML + (toApprove && state.taskFilter !== 'done'
       ? '<div class="task-group">Follow-ups</div><p class="task-empty">No open follow-ups.</p>'
-      : emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : ''));
+      : emptyHTML(state.taskFilter === 'done' ? 'Nothing finished yet' : state.taskDue === 'today' ? 'Nothing due today' : state.taskDue === 'overdue' ? 'Nothing overdue' : 'No follow-ups', state.taskFilter === 'mine' ? 'Tasks assigned to you show up here.' : ''));
     return;
   }
   if (state.taskFilter === 'done') { list.innerHTML = state.taskLog.length ? doneLogHTML(rows) : rows.map(taskCardHTML).join(''); return; }
