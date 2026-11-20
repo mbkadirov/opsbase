@@ -437,7 +437,7 @@ function bindEvents() {
   chipGroup('issueChips', (v) => { state.issueStatus = v; renderIssues(); });
   chipGroup('reportChips', (v) => { state.reportPeriod = v; renderReports(); });
   chipGroup('taskChips', (v) => { state.taskFilter = v; renderTasks(); });
-  $('taskStore').addEventListener('change', (e) => { state.taskStore = e.target.value; renderTasks(); });
+  $('taskStoreFilter').addEventListener('change', (e) => { state.taskStore = e.target.value; renderTasks(); });
   $('taskCancel').addEventListener('click', () => closeSheet('taskSheet'));
   $('taskSave').addEventListener('click', saveTask);
   $('newTaskBtn').addEventListener('click', () => openTaskSheet(null));
@@ -1000,7 +1000,7 @@ function taskCardHTML(t) {
 const taskStoreOk = (storeId) => state.taskStore === 'all' || (state.taskStore === 'none' ? !storeId : storeId === state.taskStore);
 
 function renderTaskStoreFilter() {
-  const sel = $('taskStore');
+  const sel = $('taskStoreFilter');
   // Only stores that have something to show under the chip picked (Mine / Everyone / Done).
   const mine = (t) => state.taskFilter !== 'mine' || t.assignee_id === state.me?.id;
   const count = new Map();
