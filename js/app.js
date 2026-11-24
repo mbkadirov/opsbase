@@ -27,7 +27,7 @@ const state = {
   assignUser: null,
   tasks: [],
   taskLog: [],
-  taskFilter: 'mine',
+  taskFilter: 'all', // Everyone; crew leads fall back to Mine,
   taskStore: 'all',
   taskDue: 'any', // 'any' | 'today' | 'overdue' — works with Mine / Everyone
   calView: 'day',
